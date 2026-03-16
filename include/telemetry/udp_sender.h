@@ -5,6 +5,7 @@
 #include <string>
 #include <atomic> // Added for thread-safe sequence counter
 #include <mutex>  // Added for std::once_flag
+#include <optional>
 
 #include "common/MathUtils.h"
 #include "sensors/ImuSim.h"
@@ -29,7 +30,7 @@ struct TelemetryData {
 
 class TelemetryBuffer {
 private:
-    TelemetryData data_;
+    std::optional<TelemetryData> data_;
     std::mutex mtx_;
 
 public:
@@ -38,7 +39,7 @@ public:
         data_ = new_data;
     }
 
-    TelemetryData getLatest() {
+    std::optional<TelemetryData> getLatest() {
         std::lock_guard<std::mutex> lock(mtx_);
         return data_;
     }

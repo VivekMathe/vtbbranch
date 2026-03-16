@@ -161,11 +161,9 @@ void telemetryTask(TelemetryBuffer& shared_buffer, UdpSender& udp) {
         auto start_time = std::chrono::steady_clock::now();
 
         // Get the latest telemetry data from the thread-safe buffer
-        TelemetryData latest_data = shared_buffer.getLatest();
-
-        // Send telemetry if time has advanced
-        if (latest_data.t > 0.0) {
-            udp.sendFromSim(latest_data);
+        // If data exists, send it. If not, wait until next loop.
+        if (auto latest_data_opt = shared_buffer.getLatest()) {
+            udp.sendFromSim(*latest_data_opt);
         }
 
         // Sleep until 35ms passed from start of execution (safety margin for ~25Hz)
