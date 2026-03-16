@@ -1,10 +1,11 @@
 #include <iostream>
 #include <iomanip>
 
+#include <thread>
+
 #ifdef _WIN32
     #include <WinSock2.h>
     #include <Windows.h>
-    #include <thread>
 #endif
 
 #include "common/TimeKeeper.h"
@@ -43,6 +44,11 @@ int main() {
     MotorModel motormodel;
     UdpSender udp("127.0.0.1", 8080); //KINETIC 192.168.1.2
     
+    // Telemetry Thread setup
+    TelemetryBuffer telemetry_buffer;
+    std::thread tele_thread(telemetryTask, std::ref(telemetry_buffer), std::ref(udp));
+    tele_thread.detach();
+
 #ifdef PLATFORM_LINUX
     RCIn rcin;
     rcin.initialize();
@@ -389,19 +395,24 @@ int main() {
         }
 
         // ---------------- Telemetry -----------------
-        if (clock.taskClock.tele >= clock.rates.tele) {
-            udp.sendFromSim(
-                t, dt, Hz,
-                navState,
-                MM,
-                outer,
-                imu,
-                armed,
-                NIS,
-                pwmCmd
-            );
-            clock.taskClock.tele = 0.0;
-        }
+        TelemetryData teleData;
+        teleData.t = t;
+        teleData.dt = dt;
+        teleData.Hz = Hz;
+        teleData.navState = navState;
+        teleData.posCmd = MM.out.posCmd;
+        teleData.phase = static_cast<int>(MM.out.phase);
+        teleData.mode = static_cast<int>(MM.out.mode);
+        teleData.attCmd = outer.out.attCmd;
+        teleData.imuGyro = imu.imu.gyro;
+        teleData.imuAccel = imu.imu.accel;
+        teleData.armed = armed;
+        teleData.NIS = NIS;
+        teleData.pwmCmd = pwmCmd;
+
+        telemetry_buffer.update(teleData);
+        clock.taskClock.tele = 0.0;
+
         // ---------------- Simulation ----------------
         if (clock.taskClock.sim >= clock.rates.sim) {
             thrustAct = motormodel.step(clock.taskClock.sim, thrustCmd);
