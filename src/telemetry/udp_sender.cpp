@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <utility>
 #include <mutex> // Needed for std::call_once
+#include <chrono>
+#include <thread>
 
 using json = nlohmann::json;
 
@@ -102,36 +104,28 @@ bool UdpSender::sendJson_(const json& j) {
 
 // =======================EDIT HERE IF YOU WANT TO ADD===============================
 
-bool UdpSender::sendFromSim(
-    double t, double dt, double Hz,
-    const Vec<15>& navState,
-    const ModeManager& MM,
-    const OuterLoop& outer,
-    const ImuSim& imu,
-    const bool& armed,
-    const double NIS,
-    const Vec<4>& PWMcmd)
+bool UdpSender::sendFromSim(const TelemetryData& data)
 {
     // ---- Extract what MATLAB expects ----
-    const Vecf<3> euler_est = navState.segment<3>(0).cast<float>();
-    const Vecf<3> pos_est = navState.segment<3>(3).cast<float>();
-    const Vecf<3> vel_est = navState.segment<3>(6).cast<float>();
+    const Vecf<3> euler_est = data.navState.segment<3>(0).cast<float>();
+    const Vecf<3> pos_est = data.navState.segment<3>(3).cast<float>();
+    const Vecf<3> vel_est = data.navState.segment<3>(6).cast<float>();
 
     // ModeManager outputs
-    const Vecf<3> pos_cmd = MM.out.posCmd.cast<float>();
+    const Vecf<3> pos_cmd = data.posCmd.cast<float>();
 
     // OuterLoop outputs (commanded attitude)
-    const Vecf<3> euler_cmd = outer.out.attCmd.cast<float>();
-    const Veci<4> PWMCmd = PWMcmd.cast<int>();
+    const Vecf<3> euler_cmd = data.attCmd.cast<float>();
+    const Veci<4> PWMCmd = data.pwmCmd.cast<int>();
 
     // IMU outputs
-    const Vecf<3> omega_est = imu.imu.gyro.cast<float>();
-    const Vecf<3> accel = imu.imu.accel.cast<float>();
+    const Vecf<3> omega_est = data.imuGyro.cast<float>();
+    const Vecf<3> accel = data.imuAccel.cast<float>();
 
-    const float tf = static_cast<float>(t);
-    const float dtf = static_cast<float>(dt);
-    const float Hzf = static_cast<float>(Hz);
-    const float NISf = static_cast<float>(NIS);
+    const float tf = static_cast<float>(data.t);
+    const float dtf = static_cast<float>(data.dt);
+    const float Hzf = static_cast<float>(data.Hz);
+    const float NISf = static_cast<float>(data.NIS);
 
     json j;
 
@@ -142,11 +136,9 @@ bool UdpSender::sendFromSim(
     j["dt"] = dtf;
     j["Hz"] = Hzf;
 
-    // If you do NOT have phase in ModeManager, set 0 or add it later.
-    // If you DO have it, replace with static_cast<int>(MM.out.phase)
-    j["phase"] = static_cast<int>(MM.out.phase);
-    j["mode"] = static_cast<int>(MM.out.mode);
-    j["armed"] = armed;
+    j["phase"] = data.phase;
+    j["mode"] = data.mode;
+    j["armed"] = data.armed;
     j["EKF_Health"] = NISf;
 
     j["pos_cmd"] = vec3ToJson(pos_cmd);
@@ -162,4 +154,26 @@ bool UdpSender::sendFromSim(
     j["euler_cmd"] = vec3ToJson(euler_cmd);
 
     return sendJson_(j);
+}
+
+void telemetryTask(TelemetryBuffer& shared_buffer, UdpSender& udp) {
+    while (true) {
+        auto start_time = std::chrono::steady_clock::now();
+
+        // Get the latest telemetry data from the thread-safe buffer
+        TelemetryData latest_data = shared_buffer.getLatest();
+
+        // Send telemetry if time has advanced
+        if (latest_data.t > 0.0) {
+            udp.sendFromSim(latest_data);
+        }
+
+        // Sleep until 40ms passed from start of execution (25Hz)
+        auto end_time = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+
+        if (elapsed < std::chrono::milliseconds(40)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(40) - elapsed);
+        }
+    }
 }
