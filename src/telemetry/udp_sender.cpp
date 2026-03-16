@@ -168,12 +168,12 @@ void telemetryTask(TelemetryBuffer& shared_buffer, UdpSender& udp) {
             udp.sendFromSim(latest_data);
         }
 
-        // Sleep until 40ms passed from start of execution (25Hz)
+        // Sleep until 35ms passed from start of execution (safety margin for ~25Hz)
         auto end_time = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
-        if (elapsed < std::chrono::milliseconds(40)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(40) - elapsed);
+        if (elapsed < std::chrono::milliseconds(35)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(35) - elapsed);
         }
     }
 }
