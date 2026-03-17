@@ -24,6 +24,11 @@ eul_log = [];          % Nx3 [r p y]
 hz_log  = [];          % [Hz]
 health_log = [];
 
+% Battery logging
+t_batt_log = [];
+batt_v_log = [];
+batt_i_log = [];
+
 % Optional: stop if telemetry disappears for too long
 telemetryTimeout_s = 10.0;     % set [] or inf to disable
 lastRx_tic = tic;
@@ -187,93 +192,103 @@ while ishandle(ax)
         % mark telemetry alive
         lastRx_tic = tic;
 
-        % =========================
-        % LOG THIS SAMPLE
-        % =========================
-        t_log(end+1,1)      = s.t;
-        pos_log(end+1,1:3)  = reshape(s.pos_est,1,3);
-        vel_log(end+1,1:3)  = reshape(s.vel_est,1,3);
-        eul_log(end+1,1:3)  = reshape(s.euler_est,1,3);
-        hz_log(end+1,1)     = s.Hz;
-        health_log(end+1,1) = s.EKF_Health;
-
-        k = k + 1;
-        idx = mod(k-1,N)+1;
-
-        pe_n(idx) = s.pos_est(1);
-        pe_e(idx) = s.pos_est(2);
-        pe_d(idx) = s.pos_est(3);
-
-        if mod(k,plotEvery)~=0
-            continue;
-        end
-
-        if k < N
-            ii = 1:k;
+        % Handle different packet types
+        if isfield(s, 'type') && strcmp(s.type, 'battery')
+            % =========================
+            % LOG BATTERY SAMPLE
+            % =========================
+            t_batt_log(end+1,1) = s.t;
+            batt_v_log(end+1,1) = s.voltage;
+            batt_i_log(end+1,1) = s.current;
         else
-            ii = [idx+1:N 1:idx];
+            % =========================
+            % LOG STATE SAMPLE
+            % =========================
+            t_log(end+1,1)      = s.t;
+            pos_log(end+1,1:3)  = reshape(s.pos_est,1,3);
+            vel_log(end+1,1:3)  = reshape(s.vel_est,1,3);
+            eul_log(end+1,1:3)  = reshape(s.euler_est,1,3);
+            hz_log(end+1,1)     = s.Hz;
+            health_log(end+1,1) = s.EKF_Health;
+
+            k = k + 1;
+            idx = mod(k-1,N)+1;
+
+            pe_n(idx) = s.pos_est(1);
+            pe_e(idx) = s.pos_est(2);
+            pe_d(idx) = s.pos_est(3);
+
+            if mod(k,plotEvery)~=0
+                continue;
+            end
+
+            if k < N
+                ii = 1:k;
+            else
+                ii = [idx+1:N 1:idx];
+            end
+
+            % Plot coordinates are [E, N, -D]
+            X = pe_e(ii); Y = pe_n(ii); Z = -pe_d(ii);
+            set(hTrail,'XData',X,'YData',Y,'ZData',Z);
+
+            phi = s.euler_est(1);
+            th  = s.euler_est(2);
+            psi = s.euler_est(3);
+
+            p_ned = [s.pos_est(1); s.pos_est(2); s.pos_est(3)];
+            p_plot = [p_ned(2); p_ned(1); -p_ned(3)];
+            set(hGround, 'XData', p_plot(1), 'YData', p_plot(2), 'ZData', 0);
+
+            Rnb     = rotmBodyToNED(-phi, -th, -psi);   % body -> NED
+            Rplot_b = T_plot_ned * Rnb;                 % body -> plot
+
+            p_plot = [s.pos_est(2); s.pos_est(1); -s.pos_est(3)];
+
+            a = armSpan/2;
+            d1_b = (a/sqrt(2))*[ 1;  1; 0];
+            d2_b = (a/sqrt(2))*[ 1; -1; 0];
+
+            p1a = p_plot - Rplot_b*d1_b;  p1b = p_plot + Rplot_b*d1_b;
+            p2a = p_plot - Rplot_b*d2_b;  p2b = p_plot + Rplot_b*d2_b;
+
+            set(hArm1,'XData',[p1a(1) p1b(1)],'YData',[p1a(2) p1b(2)],'ZData',[p1a(3) p1b(3)]);
+            set(hArm2,'XData',[p2a(1) p2b(1)],'YData',[p2a(2) p2b(2)],'ZData',[p2a(3) p2b(3)]);
+
+            ex_b = [1;0;0]; ey_b = [0;1;0]; ez_b = [0;0;1];
+
+            px = p_plot + axisLen*(Rplot_b*ex_b);
+            py = p_plot + axisLen*(Rplot_b*ey_b);
+            pz = p_plot + axisLen*(Rplot_b*ez_b);
+
+            set(hBx,'XData',[p_plot(1) px(1)],'YData',[p_plot(2) px(2)],'ZData',[p_plot(3) px(3)]);
+            set(hBy,'XData',[p_plot(1) py(1)],'YData',[p_plot(2) py(2)],'ZData',[p_plot(3) py(3)]);
+            set(hBz,'XData',[p_plot(1) pz(1)],'YData',[p_plot(2) pz(2)],'ZData',[p_plot(3) pz(3)]);
+
+            phaseStr = phaseNames{s.phase + 1};
+            modeStr  = modeNames{s.mode  + 1};
+            armStr   = armNames{s.armed + 1};
+
+            txt = sprintf([ ...
+                't [s]: %.2f ','Rate [Hz]: %.2f\n' ...
+                '%s | phase: %s | mode: %s\n','EKF Health: %.2f \n' ...
+                'pos [n e d]: [% .2f % .2f % .2f]\n' ...
+                'vel [n e d]: [% .2f % .2f % .2f]\n' ...
+                'euler [r p y]: [% .2f % .2f % .2f]'], ...
+                s.t, ...
+                s.Hz, ...
+                armStr, ...
+                phaseStr, ...
+                modeStr, ...
+                s.EKF_Health,...
+                s.pos_est(1), s.pos_est(2), s.pos_est(3), ...
+                s.vel_est(1), s.vel_est(2), s.vel_est(3), ...
+                s.euler_est(1), s.euler_est(2), s.euler_est(3));
+
+            set(hText,'String',txt);
+
+            drawnow limitrate
         end
-
-        % Plot coordinates are [E, N, -D]
-        X = pe_e(ii); Y = pe_n(ii); Z = -pe_d(ii);
-        set(hTrail,'XData',X,'YData',Y,'ZData',Z);
-
-        phi = s.euler_est(1);
-        th  = s.euler_est(2);
-        psi = s.euler_est(3);
-
-        p_ned = [s.pos_est(1); s.pos_est(2); s.pos_est(3)];
-        p_plot = [p_ned(2); p_ned(1); -p_ned(3)];
-        set(hGround, 'XData', p_plot(1), 'YData', p_plot(2), 'ZData', 0);
-
-        Rnb     = rotmBodyToNED(-phi, -th, -psi);   % body -> NED
-        Rplot_b = T_plot_ned * Rnb;                 % body -> plot
-
-        p_plot = [s.pos_est(2); s.pos_est(1); -s.pos_est(3)];
-
-        a = armSpan/2;
-        d1_b = (a/sqrt(2))*[ 1;  1; 0];
-        d2_b = (a/sqrt(2))*[ 1; -1; 0];
-
-        p1a = p_plot - Rplot_b*d1_b;  p1b = p_plot + Rplot_b*d1_b;
-        p2a = p_plot - Rplot_b*d2_b;  p2b = p_plot + Rplot_b*d2_b;
-
-        set(hArm1,'XData',[p1a(1) p1b(1)],'YData',[p1a(2) p1b(2)],'ZData',[p1a(3) p1b(3)]);
-        set(hArm2,'XData',[p2a(1) p2b(1)],'YData',[p2a(2) p2b(2)],'ZData',[p2a(3) p2b(3)]);
-
-        ex_b = [1;0;0]; ey_b = [0;1;0]; ez_b = [0;0;1];
-
-        px = p_plot + axisLen*(Rplot_b*ex_b);
-        py = p_plot + axisLen*(Rplot_b*ey_b);
-        pz = p_plot + axisLen*(Rplot_b*ez_b);
-
-        set(hBx,'XData',[p_plot(1) px(1)],'YData',[p_plot(2) px(2)],'ZData',[p_plot(3) px(3)]);
-        set(hBy,'XData',[p_plot(1) py(1)],'YData',[p_plot(2) py(2)],'ZData',[p_plot(3) py(3)]);
-        set(hBz,'XData',[p_plot(1) pz(1)],'YData',[p_plot(2) pz(2)],'ZData',[p_plot(3) pz(3)]);
-
-        phaseStr = phaseNames{s.phase + 1};
-        modeStr  = modeNames{s.mode  + 1};
-        armStr   = armNames{s.armed + 1};
-
-        txt = sprintf([ ...
-            't [s]: %.2f ','Rate [Hz]: %.2f\n' ...
-            '%s | phase: %s | mode: %s\n','EKF Health: %.2f \n' ...
-            'pos [n e d]: [% .2f % .2f % .2f]\n' ...
-            'vel [n e d]: [% .2f % .2f % .2f]\n' ...
-            'euler [r p y]: [% .2f % .2f % .2f]'], ...
-            s.t, ...
-            s.Hz, ...
-            armStr, ...
-            phaseStr, ...
-            modeStr, ...
-            s.EKF_Health,...
-            s.pos_est(1), s.pos_est(2), s.pos_est(3), ...
-            s.vel_est(1), s.vel_est(2), s.vel_est(3), ...
-            s.euler_est(1), s.euler_est(2), s.euler_est(3));
-
-        set(hText,'String',txt);
-
-        drawnow limitrate
 
     catch ME
         disp(ME.message);
@@ -413,4 +428,22 @@ if ~isempty(t_log)
 
 else
     disp("No telemetry logged; nothing to plot.");
+end
+
+if ~isempty(t_batt_log)
+    [t_batt_log, order_batt] = sort(t_batt_log);
+    batt_v_log = batt_v_log(order_batt);
+    batt_i_log = batt_i_log(order_batt);
+
+    figure('Name','Telemetry Log - Battery'); clf;
+
+    subplot(2,1,1);
+    plot(t_batt_log, batt_v_log, 'LineWidth', 1.2, 'Color', [0.8 0.2 0.2]);
+    grid on; xlabel('t [s]'); ylabel('Voltage [mV]');
+    title('Battery Voltage vs Time');
+
+    subplot(2,1,2);
+    plot(t_batt_log, batt_i_log, 'LineWidth', 1.2, 'Color', [0.2 0.5 0.8]);
+    grid on; xlabel('t [s]'); ylabel('Current [mA]');
+    title('Battery Current vs Time');
 end
