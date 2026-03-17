@@ -136,6 +136,7 @@ bool UdpSender::sendFromSim(const TelemetryData& data)
     // seq_++ is now a thread-safe atomic post-increment
     j["seq"] = seq_++;
 
+    j["type"] = "state";
     j["t"] = tf;
     j["dt"] = dtf;
     j["Hz"] = Hzf;
@@ -156,6 +157,20 @@ bool UdpSender::sendFromSim(const TelemetryData& data)
 
     // MATLAB prefers euler_cmd if present
     j["euler_cmd"] = vec3ToJson(euler_cmd);
+
+    return sendJson_(j);
+}
+
+bool UdpSender::sendBatteryData(const Eigen::Matrix<double, 2, 1>& battery_data, double t)
+{
+    json j;
+
+    j["seq"] = seq_++;
+    j["type"] = "battery";
+    j["t"] = static_cast<float>(t);
+
+    j["voltage"] = battery_data(0);
+    j["current"] = battery_data(1);
 
     return sendJson_(j);
 }
@@ -182,6 +197,13 @@ void telemetryTask(TelemetryBuffer& shared_buffer, UdpSender& udp) {
         // If data exists, send it. If not, wait until next loop.
         if (auto latest_data_opt = shared_buffer.getLatest()) {
             udp.sendFromSim(*latest_data_opt);
+
+#ifdef PLATFORM_LINUX
+            // If we just read the battery this cycle, send it now using the latest simulation time
+            if (elapsed_battery >= 1) {
+                udp.sendBatteryData(current_battery, latest_data_opt->t);
+            }
+#endif
         }
 
         // Sleep until 35ms passed from start of execution (safety margin for ~25Hz)

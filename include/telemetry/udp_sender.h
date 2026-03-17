@@ -76,6 +76,9 @@ public:
     // Sends the provided telemetry data.
     bool sendFromSim(const TelemetryData& data);
 
+    // Sends the provided battery data.
+    bool sendBatteryData(const Eigen::Matrix<double, 2, 1>& battery_data, double t);
+
 private:
     bool sendJson_(const nlohmann::json& j);
     void closeSocket_() noexcept;
