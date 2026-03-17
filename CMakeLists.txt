@@ -76,6 +76,7 @@ if(UNIX AND NOT APPLE)
         src/drivers/MotorDriver.cpp
         src/drivers/RCIn.cpp
         src/sensors/IMUHandler.cpp
+        src/sensors/BatteryHandler.cpp
         
         # Your Thermal Camera and Vision algorithms
         src/sensors/ThermalCamera.cpp
