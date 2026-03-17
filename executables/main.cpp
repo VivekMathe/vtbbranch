@@ -26,7 +26,6 @@
     #include "drivers/MotorDriver.h"
     #include "drivers/RCIn.h"
     #include "sensors/IMUHandler.h"
-    #include "sensors/BatteryHandler.h"
     #include <unistd.h>
 #endif
 
@@ -61,9 +60,6 @@ int main() {
     imuStats(5) = imuStats(5) + g;
     AHRS ahrs(imuStats.segment<6>(0));
     EKF ekf; // add bias constructor
-
-    BatteryHandler batteryHandler;
-    Eigen::Matrix<double, 2, 1> current_battery = Eigen::Matrix<double, 2, 1>::Zero();
 #endif
 #ifdef _WIN32
     //init nav after imu so that you can put the biasees and noise into the constructor.
@@ -130,13 +126,6 @@ int main() {
             opti.step(dynamics.getTrueState());
             clock.taskClock.opti = 0.0;
         }
-
-#ifdef PLATFORM_LINUX
-        if (clock.taskClock.battery >= clock.rates.battery) {
-            current_battery = batteryHandler.read_battery();
-            clock.taskClock.battery = 0.0;
-        }
-#endif
 
         // ---------------- EKF ----------------
         if (!ekf.init) {

@@ -6,6 +6,10 @@
 #include <chrono>
 #include <thread>
 
+#ifdef PLATFORM_LINUX
+#include "sensors/BatteryHandler.h"
+#endif
+
 using json = nlohmann::json;
 
 #ifdef _WIN32
@@ -157,8 +161,22 @@ bool UdpSender::sendFromSim(const TelemetryData& data)
 }
 
 void telemetryTask(TelemetryBuffer& shared_buffer, UdpSender& udp) {
+#ifdef PLATFORM_LINUX
+    BatteryHandler batteryHandler;
+    auto last_battery_time = std::chrono::steady_clock::now();
+    Eigen::Matrix<double, 2, 1> current_battery = Eigen::Matrix<double, 2, 1>::Zero();
+#endif
+
     while (true) {
         auto start_time = std::chrono::steady_clock::now();
+
+#ifdef PLATFORM_LINUX
+        auto elapsed_battery = std::chrono::duration_cast<std::chrono::seconds>(start_time - last_battery_time).count();
+        if (elapsed_battery >= 1) {
+            current_battery = batteryHandler.read_battery();
+            last_battery_time = start_time;
+        }
+#endif
 
         // Get the latest telemetry data from the thread-safe buffer
         // If data exists, send it. If not, wait until next loop.

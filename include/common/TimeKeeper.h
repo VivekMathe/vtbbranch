@@ -22,7 +22,6 @@ public:
 		static constexpr double sim = 1.0 / 1000;
 		static constexpr double keys = 1.0 / 400;
 		static constexpr double writePWM = 1.0 / 400;
-		static constexpr double battery = 1.0;
 													
 	};
 
@@ -39,7 +38,6 @@ public:
 		double sim = 0.0;
 		double keys = 0.0;
 		double writePWM = 0.0;
-		double battery = 0.0;
 	};
 
 	scheduler rates;

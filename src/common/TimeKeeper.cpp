@@ -34,5 +34,4 @@ void TimeKeeper::stepClocks(double dt) {
 	taskClock.sim += dt;
 	taskClock.keys += dt;
 	taskClock.writePWM += dt;
-	taskClock.battery += dt;
 }
