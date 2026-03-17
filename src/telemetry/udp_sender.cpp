@@ -165,7 +165,7 @@ bool UdpSender::sendBatteryData(const Eigen::Matrix<double, 2, 1>& battery_data,
 {
     json j;
 
-    j["seq"] = seq_battery_++;
+    j["seq"] = seq_++;
     j["type"] = "battery";
     j["t"] = static_cast<float>(t);
 
