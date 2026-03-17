@@ -29,9 +29,9 @@ SearchGrid::Vector3D SearchGrid::rotateBodyToWorld(const Vector3D& v, double rol
 }
 
 bool SearchGrid::getGroundIntersection(double yaw_angle, double pitch_angle,
-    double drone_x, double drone_y, double drone_z,
+    double drone_east, double drone_north, double drone_z,
     double roll, double pitch, double yaw,
-    double& hit_x, double& hit_y) const {
+    double& hit_east, double& hit_north) const {
 
     Vector3D ray_body = { std::tan(pitch_angle), std::tan(yaw_angle), 1.0 };
     Vector3D ray_world = rotateBodyToWorld(ray_body, roll, pitch, yaw);
@@ -39,15 +39,20 @@ bool SearchGrid::getGroundIntersection(double yaw_angle, double pitch_angle,
     if (ray_world.z <= 0.001) return false;
 
     double scale = (-drone_z) / ray_world.z;
-    hit_x = drone_x + (ray_world.x * scale);
-    hit_y = drone_y + (ray_world.y * scale);
+    hit_north = drone_north + (ray_world.x * scale);
+    hit_east = drone_east + (ray_world.y * scale);
     return true;
 }
 
 bool SearchGrid::processFrame(const std::array<double, 768>& thermal_frame, const Eigen::Matrix<double, 6, 1>& state) {
-    double drone_x = state(0);
-    double drone_y = state(1);
-    double drone_z = state(2); // Correct Position state later to agree with our NED formatting
+    // state is assumed to be in NED (North, East, Down) from EKF/Mocap
+    double drone_north = state(0);
+    double drone_east = state(1);
+    double drone_down = state(2);
+    double drone_z = -drone_down; // Convert Down to positive altitude
+
+    // Thermal grid expects X = East (5m), Y = North (10m)
+
     double roll = state(3);
     double pitch = state(4);
     double yaw = state(5);
@@ -72,10 +77,10 @@ bool SearchGrid::processFrame(const std::array<double, 768>& thermal_frame, cons
 
             double hx[4], hy[4];
             bool valid = true;
-            valid &= getGroundIntersection(yaw_left, pitch_top, drone_x, drone_y, drone_z, roll, pitch, yaw, hx[0], hy[0]);
-            valid &= getGroundIntersection(yaw_right, pitch_top, drone_x, drone_y, drone_z, roll, pitch, yaw, hx[1], hy[1]);
-            valid &= getGroundIntersection(yaw_right, pitch_bot, drone_x, drone_y, drone_z, roll, pitch, yaw, hx[2], hy[2]);
-            valid &= getGroundIntersection(yaw_left, pitch_bot, drone_x, drone_y, drone_z, roll, pitch, yaw, hx[3], hy[3]);
+            valid &= getGroundIntersection(yaw_left, pitch_top, drone_east, drone_north, drone_z, roll, pitch, yaw, hx[0], hy[0]);
+            valid &= getGroundIntersection(yaw_right, pitch_top, drone_east, drone_north, drone_z, roll, pitch, yaw, hx[1], hy[1]);
+            valid &= getGroundIntersection(yaw_right, pitch_bot, drone_east, drone_north, drone_z, roll, pitch, yaw, hx[2], hy[2]);
+            valid &= getGroundIntersection(yaw_left, pitch_bot, drone_east, drone_north, drone_z, roll, pitch, yaw, hx[3], hy[3]);
 
             if (!valid) continue;
 
