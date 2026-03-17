@@ -55,6 +55,7 @@ add_executable(FireMission
     src/sensors/ImuSim.cpp 
     src/sensors/OptiSim.cpp
     src/telemetry/udp_sender.cpp 
+    src/telemetry/network.cpp
     src/estimation/AHRS.cpp
 )
 
