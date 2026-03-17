@@ -52,7 +52,7 @@ private:
     struct Vector3D { double x, y, z; };
     Vector3D rotateBodyToWorld(const Vector3D& v, double roll, double pitch, double yaw) const;
     bool getGroundIntersection(double yaw_angle, double pitch_angle,
-        double drone_east, double drone_north, double drone_z,
+        double drone_x, double drone_y, double drone_z,
         double roll, double pitch, double yaw,
-        double& hit_east, double& hit_north) const;
+        double& hit_x, double& hit_y) const;
 };
