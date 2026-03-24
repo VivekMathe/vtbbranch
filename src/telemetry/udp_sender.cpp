@@ -137,6 +137,7 @@ bool UdpSender::sendFromSim(
     // seq_++ is now a thread-safe atomic post-increment
     j["seq"] = seq_++;
 
+    j["type"] = "state";
     j["t"] = tf;
     j["dt"] = dtf;
     j["Hz"] = Hzf;
@@ -156,6 +157,18 @@ bool UdpSender::sendFromSim(
 
     // MATLAB prefers euler_cmd if present
     j["euler_cmd"] = vec3ToJson(euler_cmd);
+
+    return sendJson_(j);
+}
+
+bool UdpSender::sendBattery(double t, double voltage, double current) {
+    json j;
+
+    j["seq"] = seq_++;
+    j["type"] = "battery";
+    j["t"] = static_cast<float>(t);
+    j["voltage"] = static_cast<float>(voltage);
+    j["current"] = static_cast<float>(current);
 
     return sendJson_(j);
 }
