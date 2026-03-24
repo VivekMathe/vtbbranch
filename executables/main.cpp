@@ -29,7 +29,7 @@ int main() {
     UdpSender udp("127.0.0.1", 8080); //KINETIC 192.168.1.2
 
     TelemetryTask telemetry_task(udp);
-    telemetry_task.start();
+    std::thread telemetry_thread(&TelemetryTask::loop, &telemetry_task);
 
     RCIn rcin;
     rcin.initialize();
@@ -447,6 +447,11 @@ int main() {
             //usleep(1);
 #endif
     //std::this_thread::yield();
+    }
+
+    telemetry_task.stop();
+    if (telemetry_thread.joinable()) {
+        telemetry_thread.join();
     }
 }
 

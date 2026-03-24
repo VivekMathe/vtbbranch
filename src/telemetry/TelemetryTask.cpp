@@ -12,17 +12,8 @@ void TelemetryTask::updateState(const TelemetryState& new_state) {
     current_state_ = new_state;
 }
 
-void TelemetryTask::start() {
-    if (running_) return;
-    running_ = true;
-    thread_ = std::thread(&TelemetryTask::loop, this);
-}
-
 void TelemetryTask::stop() {
     running_ = false;
-    if (thread_.joinable()) {
-        thread_.join();
-    }
 }
 
 void TelemetryTask::loop() {

@@ -29,18 +29,15 @@ public:
     // Copy latest state from main loop
     void updateState(const TelemetryState& new_state);
 
-    // Start background thread
-    void start();
+    // Run the telemetry background loop
+    void loop();
 
     // Stop background thread safely
     void stop();
 
 private:
-    void loop();
-
     UdpSender& udp_;
     TelemetryState current_state_;
     std::mutex state_mutex_;
-    std::atomic<bool> running_{false};
-    std::thread thread_;
+    std::atomic<bool> running_{true};
 };
