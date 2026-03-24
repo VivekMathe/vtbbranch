@@ -5,45 +5,11 @@
 #include <string>
 #include <atomic> // Added for thread-safe sequence counter
 #include <mutex>  // Added for std::once_flag
-#include <optional>
 
 #include "common/MathUtils.h"
 #include "sensors/ImuSim.h"
 #include "control/OuterLoop.h"
 #include "guidance/ModeManager.h"
-
-struct TelemetryData {
-    double t = 0.0;
-    double dt = 0.0;
-    double Hz = 0.0;
-    Vec<15> navState = Vec<15>::Zero();
-    Vec<3> posCmd = Vec<3>::Zero();
-    int phase = 0;
-    int mode = 0;
-    Vec<3> attCmd = Vec<3>::Zero();
-    Vec<3> imuGyro = Vec<3>::Zero();
-    Vec<3> imuAccel = Vec<3>::Zero();
-    bool armed = false;
-    double NIS = 0.0;
-    Vec<4> pwmCmd = Vec<4>::Zero();
-};
-
-class TelemetryBuffer {
-private:
-    std::optional<TelemetryData> data_;
-    std::mutex mtx_;
-
-public:
-    void update(const TelemetryData& new_data) {
-        std::lock_guard<std::mutex> lock(mtx_);
-        data_ = new_data;
-    }
-
-    std::optional<TelemetryData> getLatest() {
-        std::lock_guard<std::mutex> lock(mtx_);
-        return data_;
-    }
-};
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -73,11 +39,18 @@ public:
 
     void resetSeq(uint32_t seq = 0);
 
-    // Sends the provided telemetry data.
-    bool sendFromSim(const TelemetryData& data);
-
-    // Sends the provided battery data.
-    bool sendBatteryData(const Eigen::Matrix<double, 2, 1>& battery_data, double t);
+    // The only call you want long-term:
+    // Pass the objects that will still exist even after you delete print vectors.
+    bool sendFromSim(
+        double t,
+        double dt,
+        double Hz,
+        const Vec<15>& navState,
+        const ModeManager& MM,
+        const OuterLoop& outer,
+        const bool& armed,
+        const double NIS,
+        const Vec<4>& PWMcmd);
 
 private:
     bool sendJson_(const nlohmann::json& j);
@@ -97,6 +70,3 @@ private:
     static std::once_flag wsa_flag_;
 #endif
 };
-
-// Thread task for sending telemetry data at 25Hz
-void telemetryTask(TelemetryBuffer& shared_buffer, UdpSender& udp);

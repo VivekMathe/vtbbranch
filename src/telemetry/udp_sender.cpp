@@ -3,12 +3,6 @@
 #include <stdexcept>
 #include <utility>
 #include <mutex> // Needed for std::call_once
-#include <chrono>
-#include <thread>
-
-#ifdef PLATFORM_LINUX
-#include "sensors/BatteryHandler.h"
-#endif
 
 using json = nlohmann::json;
 
@@ -108,42 +102,48 @@ bool UdpSender::sendJson_(const json& j) {
 
 // =======================EDIT HERE IF YOU WANT TO ADD===============================
 
-bool UdpSender::sendFromSim(const TelemetryData& data)
+bool UdpSender::sendFromSim(
+    double t, double dt, double Hz,
+    const Vec<15>& navState,
+    const ModeManager& MM,
+    const OuterLoop& outer,
+    const bool& armed,
+    const double NIS,
+    const Vec<4>& PWMcmd)
 {
     // ---- Extract what MATLAB expects ----
-    const Vecf<3> euler_est = data.navState.segment<3>(0).cast<float>();
-    const Vecf<3> pos_est = data.navState.segment<3>(3).cast<float>();
-    const Vecf<3> vel_est = data.navState.segment<3>(6).cast<float>();
+    const Vecf<3> euler_est = navState.segment<3>(0).cast<float>();
+    const Vecf<3> pos_est = navState.segment<3>(3).cast<float>();
+    const Vecf<3> vel_est = navState.segment<3>(6).cast<float>();
 
     // ModeManager outputs
-    const Vecf<3> pos_cmd = data.posCmd.cast<float>();
+    const Vecf<3> pos_cmd = MM.out.posCmd.cast<float>();
 
     // OuterLoop outputs (commanded attitude)
-    const Vecf<3> euler_cmd = data.attCmd.cast<float>();
-    const Veci<4> PWMCmd = data.pwmCmd.cast<int>();
+    const Vecf<3> euler_cmd = outer.out.attCmd.cast<float>();
+    const Veci<4> PWMCmd = PWMcmd.cast<int>();
 
     // IMU outputs
-    const Vecf<3> omega_est = data.imuGyro.cast<float>();
-    const Vecf<3> accel = data.imuAccel.cast<float>();
 
-    const float tf = static_cast<float>(data.t);
-    const float dtf = static_cast<float>(data.dt);
-    const float Hzf = static_cast<float>(data.Hz);
-    const float NISf = static_cast<float>(data.NIS);
+    const float tf = static_cast<float>(t);
+    const float dtf = static_cast<float>(dt);
+    const float Hzf = static_cast<float>(Hz);
+    const float NISf = static_cast<float>(NIS);
 
     json j;
 
     // seq_++ is now a thread-safe atomic post-increment
     j["seq"] = seq_++;
 
-    j["type"] = "state";
     j["t"] = tf;
     j["dt"] = dtf;
     j["Hz"] = Hzf;
 
-    j["phase"] = data.phase;
-    j["mode"] = data.mode;
-    j["armed"] = data.armed;
+    // If you do NOT have phase in ModeManager, set 0 or add it later.
+    // If you DO have it, replace with static_cast<int>(MM.out.phase)
+    j["phase"] = static_cast<int>(MM.out.phase);
+    j["mode"] = static_cast<int>(MM.out.mode);
+    j["armed"] = armed;
     j["EKF_Health"] = NISf;
 
     j["pos_cmd"] = vec3ToJson(pos_cmd);
@@ -152,66 +152,8 @@ bool UdpSender::sendFromSim(const TelemetryData& data)
     j["vel_est"] = vec3ToJson(vel_est);
     j["euler_est"] = vec3ToJson(euler_est);
 
-    j["omega_est"] = vec3ToJson(omega_est);
-    j["accel"] = vec3ToJson(accel);
-
     // MATLAB prefers euler_cmd if present
     j["euler_cmd"] = vec3ToJson(euler_cmd);
 
     return sendJson_(j);
-}
-
-bool UdpSender::sendBatteryData(const Eigen::Matrix<double, 2, 1>& battery_data, double t)
-{
-    json j;
-
-    j["seq"] = seq_++;
-    j["type"] = "battery";
-    j["t"] = static_cast<float>(t);
-
-    j["voltage"] = battery_data(0);
-    j["current"] = battery_data(1);
-
-    return sendJson_(j);
-}
-
-void telemetryTask(TelemetryBuffer& shared_buffer, UdpSender& udp) {
-#ifdef PLATFORM_LINUX
-    BatteryHandler batteryHandler;
-    auto last_battery_time = std::chrono::steady_clock::now();
-    Eigen::Matrix<double, 2, 1> current_battery = Eigen::Matrix<double, 2, 1>::Zero();
-#endif
-
-    while (true) {
-        auto start_time = std::chrono::steady_clock::now();
-
-#ifdef PLATFORM_LINUX
-        auto elapsed_battery = std::chrono::duration_cast<std::chrono::seconds>(start_time - last_battery_time).count();
-        if (elapsed_battery >= 1) {
-            current_battery = batteryHandler.read_battery();
-            last_battery_time = start_time;
-        }
-#endif
-
-        // Get the latest telemetry data from the thread-safe buffer
-        // If data exists, send it. If not, wait until next loop.
-        if (auto latest_data_opt = shared_buffer.getLatest()) {
-            udp.sendFromSim(*latest_data_opt);
-
-#ifdef PLATFORM_LINUX
-            // If we just read the battery this cycle, send it now using the latest simulation time
-            if (elapsed_battery >= 1) {
-                udp.sendBatteryData(current_battery, latest_data_opt->t);
-            }
-#endif
-        }
-
-        // Sleep until 35ms passed from start of execution (safety margin for ~25Hz)
-        auto end_time = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
-
-        if (elapsed < std::chrono::milliseconds(35)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(35) - elapsed);
-        }
-    }
 }

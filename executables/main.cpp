@@ -1,13 +1,5 @@
 #include <iostream>
 #include <iomanip>
-
-#include <thread>
-
-#ifdef _WIN32
-    #include <WinSock2.h>
-    #include <Windows.h>
-#endif
-
 #include "common/TimeKeeper.h"
 #include "common/MathUtils.h"
 #include "control/InnerLoop.h"
@@ -15,41 +7,26 @@
 #include "control/QuadMixer.h"
 #include "estimation/EKF.h"
 #include "guidance/ModeManager.h"
-#include "sensors/ImuSim.h"
-#include "sensors/OptiSim.h"
-#include "simulator/Dynamics.h"
-#include "simulator/MotorModel.h"
 #include "telemetry/udp_sender.h"
 #include "estimation/AHRS.h"
+#include "drivers/MotorDriver.h"
+#include "drivers/RCIn.h"
+#include "sensors/IMUHandler.h"
+#include <unistd.h>
+#include "mocap/mocapHandler.h"
 
-#ifdef PLATFORM_LINUX
-    #include "drivers/MotorDriver.h"
-    #include "drivers/RCIn.h"
-    #include "sensors/IMUHandler.h"
-    #include <unistd.h>
-#endif
 
 int main() {
 
     std::cout << std::fixed << std::setprecision(4);
     //init objects
     TimeKeeper clock;
-    Dynamics dynamics;
-    ImuSim imu;
-    OptiSim opti;
     ModeManager MM;
     OuterLoop outer;
     InnerLoop inner;
     QuadMixer mixer;
-    MotorModel motormodel;
     UdpSender udp("127.0.0.1", 8080); //KINETIC 192.168.1.2
-    
-    // Telemetry Thread setup
-    TelemetryBuffer telemetry_buffer;
-    std::thread tele_thread(telemetryTask, std::ref(telemetry_buffer), std::ref(udp));
-    tele_thread.detach();
 
-#ifdef PLATFORM_LINUX
     RCIn rcin;
     rcin.initialize();
 
@@ -60,15 +37,12 @@ int main() {
     imuStats(5) = imuStats(5) + g;
     AHRS ahrs(imuStats.segment<6>(0));
     EKF ekf; // add bias constructor
-#endif
-#ifdef _WIN32
-    //init nav after imu so that you can put the biasees and noise into the constructor.
-    EKF ekf;
-    AHRS ahrs;
-#endif
+    MocapHandler mocap;
+    bool mocapInit = mocap.init();
+
     //init vars
     double lastPrint = 0.0;
-    const double printDt = 1.0; 
+    const double printDt = 1.0;
 
     Vec<3> momentsCmd = Vec<3>::Zero();
     Vec<4> thrustCmd = Vec<4>::Zero();
@@ -79,9 +53,6 @@ int main() {
     Vec<3> manVel = Vec<3>::Zero();
     double manPsi = 0.0;
 
-    Vec<4> thrustAct = Vec<4>::Zero();
-    Vec<4> wrenchAct = Vec<4>::Zero();
-
     int step = 0;
     double Hz = 0.0;
     double HzTimer = 0.0;
@@ -89,7 +60,7 @@ int main() {
 
     bool autopilot = false;
     bool printOn = true;
-    bool armed = false;
+    bool armed = true;
     bool motorInit = false;
     double armTime = 0.0;
 
@@ -100,8 +71,8 @@ int main() {
 
     while (true) {
 
-        const double dt = clock.dt();
-        const double t = clock.elapsed();
+        double dt = clock.dt();
+        double t = clock.elapsed();
         clock.stepClocks(dt);
         step++;
 
@@ -115,31 +86,30 @@ int main() {
         }
 
         if (clock.taskClock.imu >= clock.rates.imu) {
-            imu.step(dynamics.getTrueState(), clock.taskClock.imu);
-#ifdef PLATFORM_LINUX
             imuReal.update();
-#endif
             clock.taskClock.imu = 0.0;
         }
 
         if (clock.taskClock.opti >= clock.rates.opti) {
-            opti.step(dynamics.getTrueState());
+            mocap.update();
             clock.taskClock.opti = 0.0;
         }
 
         // ---------------- EKF ----------------
+
         if (!ekf.init) {
-            ekf.initializeFromOpti(opti.opti);
+            ekf.initializeFromOpti(mocap.opti);
             ekf.init = true;
         }
 
         if (clock.taskClock.navPred >= clock.rates.navPred) {
-            ekf.predict(imu.imu, clock.taskClock.navPred);
+            ekf.predict(imuReal.imu, clock.taskClock.navPred);
             clock.taskClock.navPred = 0.0;
         }
 
         if (clock.taskClock.navCorr >= clock.rates.navCorr) {
-            ekf.correct(opti.opti);
+            ekf.correct(mocap.opti);
+
             NIS = ekf.getHealth();
             if (NIS > 13.28) {
                 ekfbadTimer += clock.taskClock.navCorr;
@@ -149,16 +119,17 @@ int main() {
                 ekfbadTimer = 0.0;
                 ekfgoodTimer += clock.taskClock.navCorr;
             }
+
             if (ekfbadTimer > 5.0) {
                 ekfHealthy = false;
             }
-            else if (ekfgoodTimer > 5.0) {
+            else if (ekfgoodTimer > 1.0) {
                 ekfHealthy = true;
             }
 
             clock.taskClock.navCorr = 0.0;
         }
-        const Vec<15> navState = ekf.getx();
+        Vec<15> navState = ekf.getx();
 
         // ---------------- Mode Manager ----------------
         if (clock.taskClock.MM >= clock.rates.MM) {
@@ -169,54 +140,7 @@ int main() {
             clock.taskClock.MM = 0.0;
         }
 
-        // ---------------- Manual Keyboard Controls (Windows Only) -----------
-#ifdef _WIN32
-        if (clock.taskClock.keys >= clock.rates.keys) {
-
-            Vec<3> keyVel = Vec<3>::Zero();
-            double keyPsi = 0.0;
-
-            if (GetAsyncKeyState('W') & 0x8000) {
-                keyVel(0) = 1;
-            }
-            else if (GetAsyncKeyState('S') & 0x8000) {
-                keyVel(0) = -1;
-            }
-
-            if (GetAsyncKeyState('A') & 0x8000) {
-                keyVel(1) = -1;
-            }
-            else if (GetAsyncKeyState('D') & 0x8000) {
-                keyVel(1) = 1;
-            }
-
-            if (GetAsyncKeyState(VK_SPACE) & 0x8000) {
-                keyVel(2) = -1;
-            }
-            else if (GetAsyncKeyState(VK_SHIFT) & 0x8000) {
-                keyVel(2) = 1;
-            }
-
-            if (GetAsyncKeyState('Q') & 0x8000) {
-                keyPsi = -1;
-            }
-            else if (GetAsyncKeyState('E') & 0x8000) {
-                keyPsi = 1;
-            }
-
-            if (armed) {
-                manVel = keyVel;
-                manPsi = keyPsi;
-                armTime += clock.taskClock.keys;
-            }
-
-            clock.taskClock.keys = 0.0;
-        }
-
-#endif
-
         // ---------------- Manual RC Controls (Linux Only) -------------------
-#ifdef PLATFORM_LINUX
         if (clock.taskClock.keys >= clock.rates.keys) {
             Vec<3> rcVel = Vec<3>::Zero();
             double rcPsi = 0.0;
@@ -257,125 +181,111 @@ int main() {
                 manVel = rcVel; // 1m/s max speed in each direction 
             }
         }
-#endif
-        // ---------------- Outer Loop ----------------
+            // ---------------- Outer Loop ----------------
 
-        if (clock.taskClock.conOuter >= clock.rates.conOuter) {
-            if (autopilot) {
-                outer.in.state = navState.segment<6>(3);
-                outer.in.posCmd = MM.out.posCmd;
-                outer.in.psi = navState(2);
-                outer.in.mode = MM.out.mode;
-                outer.update();
-            }
-            else {
-                outer.in.state = navState.segment<6>(3);
-                outer.in.posCmd = navState.segment<3>(3);
-                outer.in.psi = navState(2);
-                outer.in.mode = ModeManager::NavMode::Manual;
-                outer.in.velCmd = manVel;
-                outer.update();
-                outer.out.attCmd(2) = navState(2);
-            }
-            clock.taskClock.conOuter = 0.0;
-        }
-
-        // ---------------- AHRS ------------------------
-#ifdef PLATFORM_LINUX
-        if (!ahrs.init) {
-            ahrs.initializeFromAccel(imuReal.imu.accel);
-            ahrs.init = true;
-        }
-        if (clock.taskClock.AHRS >= clock.rates.AHRS) {
-            ahrs.update(imuReal.imu.accel, imuReal.imu.gyro, clock.taskClock.AHRS);
-            clock.taskClock.AHRS = 0.0;
-        }
-#endif
-#ifdef _WIN32
-        if (!ahrs.init) {
-            ahrs.initializeFromAccel(imu.imu.accel);
-            ahrs.init = true;
-        }
-        if (clock.taskClock.AHRS >= clock.rates.AHRS) {
-            ahrs.update(imu.imu.accel, imu.imu.gyro,clock.taskClock.AHRS);
-            clock.taskClock.AHRS = 0.0;
-        }
-#endif
-        Vec<3> AHRSAtt = ahrs.euler();
-        Vec<3> attManual;
-        // ---------------- Inner Loop ----------------
-        if (clock.taskClock.conInner >= clock.rates.conInner) {
-            attManual << 10 * PI / 180 * manVel(1), -10 * PI / 180 * manVel(0), navState(2);
-            manPsi = manPsi * 10 * PI / 180;
-
-            autopilot = false;
-            ekfHealthy = false;
-
-            if (autopilot && ekfHealthy) {
-                momentsCmd =
-                    inner.computeWrench(
-                        outer.out.attCmd,
-                        0.0,
-                        navState.segment<3>(0),
-                        imu.imu.gyro,
-                        clock.taskClock.conInner);
-            }
-            else if (!autopilot && ekfHealthy) {
-                momentsCmd =
-                    inner.computeWrench(
-                        outer.out.attCmd,
-                        manPsi,
-                        navState.segment<3>(0),
-                        imu.imu.gyro,
-                        clock.taskClock.conInner);
-            }
-            else if (!autopilot && !ekfHealthy) {
-                attManual(2) = AHRSAtt(2);
-                momentsCmd =
-                    inner.computeWrench(
-                        attManual,
-                        manPsi,
-                        AHRSAtt,
-                        imu.imu.gyro,clock.taskClock.conInner);
-
-                double den = cos(AHRSAtt(0)) * cos(AHRSAtt(1));
-                den = clamp(den, 0.2, 1.0);
-
-                double Fz_base = mass * g * (1 - manVel(2));
-                outer.out.Fz = clamp(Fz_base / den, 0, 2*mass*g);
-            }
-            else {
-                momentsCmd =
-                    inner.computeWrench(
-                        Vec<3>::Zero(),
-                        0.0,
-                        AHRSAtt,
-                        imu.imu.gyro,
-                        clock.taskClock.conInner);
-                outer.out.Fz = mass * g;
+            if (clock.taskClock.conOuter >= clock.rates.conOuter) {
+                if (autopilot) {
+                    outer.in.state = navState.segment<6>(3);
+                    outer.in.posCmd = MM.out.posCmd;
+                    outer.in.psi = navState(2);
+                    outer.in.mode = MM.out.mode;
+                    outer.update();
+                }
+                else {
+                    outer.in.state = navState.segment<6>(3);
+                    outer.in.posCmd = navState.segment<3>(3);
+                    outer.in.psi = navState(2);
+                    outer.in.mode = ModeManager::NavMode::Manual;
+                    outer.in.velCmd = manVel;
+                    outer.update();
+                    outer.out.attCmd(2) = navState(2);
+                }
+                clock.taskClock.conOuter = 0.0;
             }
 
-            wrenchCmd << outer.out.Fz,
-                momentsCmd(0),
-                momentsCmd(1),
-                momentsCmd(2);
-
-            thrustCmd = mixer.mix2Thrust(wrenchCmd);
-
-            pwmCmd = mixer.thr2PWM(thrustCmd); //this will go directly to the four motors
-
-            if (!armed || (armTime < 5.0)) {
-                pwmCmd = Vec<4>::Constant(1000.0);
+            // ---------------- AHRS ------------------------
+            if (!ahrs.init) {
+                ahrs.initializeFromAccel(imuReal.imu.accel);
+                ahrs.init = true;
+            }
+            if (clock.taskClock.AHRS >= clock.rates.AHRS) {
+                ahrs.update(imuReal.imu.accel, imuReal.imu.gyro, clock.taskClock.AHRS);
+                clock.taskClock.AHRS = 0.0;
             }
 
-            clock.taskClock.conInner = 0.0;
+            Vec<3> AHRSAtt = ahrs.euler();
+            Vec<3> attManual;
+            // ---------------- Inner Loop ---------------- %% CHANGE IMU TO IMUREAL IF YOU ARE DOING TESTING!!!!
 
-                        // ----------------Real Commands -------------
-            #ifdef PLATFORM_LINUX
-            //Vec<4> thrustTest = Vec<4>::Zero();
-            //thrustTest << rcPWM(2), rcPWM(2), rcPWM(2), rcPWM(2);
+            if (clock.taskClock.conInner >= clock.rates.conInner) {
+                attManual << 10 * PI / 180 * manVel(1), -10 * PI / 180 * manVel(0), navState(2);
+                manPsi = manPsi * 10 * PI / 180;
 
-                if (!motorInit && armed && (pwmCmd.array() <= 1001).all()) { 
+                autopilot = false;
+                ekfHealthy = false;
+
+                if (autopilot && ekfHealthy) {
+                    momentsCmd =
+                        inner.computeWrench(
+                            outer.out.attCmd,
+                            0.0,
+                            navState.segment<3>(0),
+                            imuReal.imu.gyro,
+                            clock.taskClock.conInner);
+                }
+                else if (!autopilot && ekfHealthy) {
+                    momentsCmd =
+                        inner.computeWrench(
+                            outer.out.attCmd,
+                            manPsi,
+                            navState.segment<3>(0),
+                            imuReal.imu.gyro,
+                            clock.taskClock.conInner);
+                }
+                else if (!autopilot && !ekfHealthy) {
+                    attManual(2) = AHRSAtt(2);
+                    momentsCmd =
+                        inner.computeWrench(
+                            attManual,
+                            manPsi,
+                            AHRSAtt,
+                            imuReal.imu.gyro, clock.taskClock.conInner);
+
+                    double den = cos(AHRSAtt(0)) * cos(AHRSAtt(1));
+                    den = clamp(den, 0.2, 1.0);
+
+                    double Fz_base = mass * g * (1 - manVel(2));
+                    outer.out.Fz = clamp(Fz_base / den, 0, 2 * mass * g);
+                }
+                else {
+                    momentsCmd =
+                        inner.computeWrench(
+                            Vec<3>::Zero(),
+                            0.0,
+                            AHRSAtt,
+                            imuReal.imu.gyro,
+                            clock.taskClock.conInner);
+                    outer.out.Fz = mass * g;
+                }
+
+                wrenchCmd << outer.out.Fz,
+                    momentsCmd(0),
+                    momentsCmd(1),
+                    momentsCmd(2);
+
+                thrustCmd = mixer.mix2Thrust(wrenchCmd);
+
+                pwmCmd = mixer.thr2PWM(thrustCmd); //this will go directly to the four motors
+
+                if (!armed || (armTime < 5.0)) {
+                    pwmCmd = Vec<4>::Constant(1000.0);
+                }
+
+                clock.taskClock.conInner = 0.0;
+
+                // ----------------Real Commands -------------
+
+                if (!motorInit && armed && (pwmCmd.array() <= 1001).all()) {
                     motdrv.initialize();
                     motorInit = true;
                 }
@@ -389,73 +299,48 @@ int main() {
                 else if (!motorInit && !armed) {
                     //do nothing; <-- wow douchebagself really put a semicolon on a comment...
                 }
+            }
 
-            #endif
+            // ---------------- Telemetry -----------------
+            if (clock.taskClock.tele >= clock.rates.tele) {
 
-        }
+                udp.sendFromSim(
+                    t, dt, Hz,
+                    navState,
+                    MM,
+                    outer,
+                    armed,
+                    NIS,
+                    pwmCmd
+                );
+                clock.taskClock.tele = 0.0;
+            }
 
-        // ---------------- Telemetry -----------------
-        TelemetryData teleData;
-        teleData.t = t;
-        teleData.dt = dt;
-        teleData.Hz = Hz;
-        teleData.navState = navState;
-        teleData.posCmd = MM.out.posCmd;
-        teleData.phase = static_cast<int>(MM.out.phase);
-        teleData.mode = static_cast<int>(MM.out.mode);
-        teleData.attCmd = outer.out.attCmd;
-        teleData.imuGyro = imu.imu.gyro;
-        teleData.imuAccel = imu.imu.accel;
-        teleData.armed = armed;
-        teleData.NIS = NIS;
-        teleData.pwmCmd = pwmCmd;
+            // ---------------- Console Print ----------------
+            if (t - lastPrint >= printDt && printOn) {
 
-        telemetry_buffer.update(teleData);
-        clock.taskClock.tele = 0.0;
+                // Clear screen + cursor home (no helpers)
 
-        // ---------------- Simulation ----------------
-        if (clock.taskClock.sim >= clock.rates.sim) {
-            thrustAct = motormodel.step(clock.taskClock.sim, thrustCmd);
-            wrenchAct = mixer.mix2Wrench(thrustAct);
+                const Vec<3> pos = navState.segment<3>(3);
+                const Vec<3> vel = navState.segment<3>(6);
+                const Vec<3> rpy = navState.segment<3>(0);
 
-            dynamics.step(clock.taskClock.sim, wrenchAct);
+                const Vec<3> posCmd = MM.out.posCmd;
 
-            clock.taskClock.sim = 0.0;
-        }
+                const Vec<3> attCmd = attManual;
 
-        // ---------------- Console Print ----------------
-        if (t - lastPrint >= printDt && printOn) {
+                const Vec<3> gyro = imuReal.imu.gyro;
+                const Vec<3> accel = imuReal.imu.accel;
+                const Vec<12> imuStat = Vec<12>::Zero();
 
-            // Clear screen + cursor home (no helpers)
+                const Vec<3> optPos = mocap.opti.pos;
+                const double optPsi = mocap.opti.psi;
 
-            const Vec<3> pos = navState.segment<3>(3);
-            const Vec<3> vel = navState.segment<3>(6);
-            const Vec<3> rpy = navState.segment<3>(0);
-
-            const Vec<3> posCmd = MM.out.posCmd;
-  
-            const Vec<3> attCmd = attManual;
-
-#ifdef _WIN32
-            const Vec<3> gyro = imu.imu.gyro;
-            const Vec<3> accel = imu.imu.accel;
-            const Vec<12> imuStat = Vec<12>::Zero();
-#endif
-
-#ifdef PLATFORM_LINUX
-            const Vec<3> gyro = imuReal.imu.gyro;
-            const Vec<3> accel = imuReal.imu.accel;
-            const Vec<12> imuStat = imuStats;
-
-#endif
-            const Vec<3> optPos = opti.opti.pos;
-            const double optPsi = opti.opti.psi;
-
-            std::cout
-                << "====================== QUADCOPTER STATE ======================\n"
-                << "  Time [s]: " << std::setw(8) << t
-                << " Rate [Hz]: " << std::setw(8) << Hz
-                << "      Mode: " << std::setw(8) << static_cast<int>(MM.out.mode)
+                std::cout
+                    << "====================== QUADCOPTER STATE ======================\n"
+                    << "  Time [s]: " << std::setw(8) << t
+                    << " Rate [Hz]: " << std::setw(8) << Hz
+                    << "      Mode: " << std::setw(8) << static_cast<int>(MM.out.mode)
                     << "     Armed: " << std::setw(8) << armed << "\n"
                     << "--------------------------------------------------------------\n"
 
@@ -506,7 +391,7 @@ int main() {
                     << std::setw(8) << pwmCmd(1) << " "
                     << std::setw(8) << pwmCmd(2) << " "
                     << std::setw(8) << pwmCmd(3) << "\n"
-#ifdef PLATFORM_LINUX
+
                     << "   rcPWM          : "
                     << std::setw(8) << rcPWM(0) << " "
                     << std::setw(8) << rcPWM(1) << " "
@@ -514,7 +399,6 @@ int main() {
                     << std::setw(8) << rcPWM(3) << " "
                     << std::setw(8) << rcPWM(4) << " "
                     << std::setw(8) << rcPWM(5) << "\n\n"
-#endif
 
                     << " SENSORS\n"
                     << "   IMU Stats : "
@@ -550,27 +434,15 @@ int main() {
                     << std::setw(8) << thrustCmd(2) << " "
                     << std::setw(8) << thrustCmd(3) << "\n"
 
-                    << "   ThrustAct [t1 t2 t3 t4] : "
-                    << std::setw(8) << thrustAct(0) << " "
-                    << std::setw(8) << thrustAct(1) << " "
-                    << std::setw(8) << thrustAct(2) << " "
-                    << std::setw(8) << thrustAct(3) << "\n"
-
-                    << "   WrenchAct [Fz Mx My Mz] : "
-                    << std::setw(8) << wrenchAct(0) << " "
-                    << std::setw(8) << wrenchAct(1) << " "
-                    << std::setw(8) << wrenchAct(2) << " "
-                    << std::setw(8) << wrenchAct(3) << "\n"
-
                     << "==============================================================\n";
-                
 
-            lastPrint = t;
-        }
-        
+                lastPrint = t;
+            }
+
 #ifdef PLATFORM_LINUX
-	//usleep(1);
+            //usleep(1);
 #endif
     //std::this_thread::yield();
     }
 }
+
