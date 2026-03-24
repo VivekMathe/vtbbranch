@@ -24,6 +24,11 @@ eul_log = [];          % Nx3 [r p y]
 hz_log  = [];          % [Hz]
 health_log = [];
 
+% Battery log
+batt_t_log = [];       % [s]
+batt_v_log = [];       % [mV]
+batt_c_log = [];       % [mA]
+
 % Optional: stop if telemetry disappears for too long
 telemetryTimeout_s = 10.0;     % set [] or inf to disable
 lastRx_tic = tic;
@@ -190,6 +195,13 @@ while ishandle(ax)
         % =========================
         % LOG THIS SAMPLE
         % =========================
+        if isfield(s, 'type') && strcmp(s.type, 'battery')
+            batt_t_log(end+1,1) = s.t;
+            batt_v_log(end+1,1) = s.voltage;
+            batt_c_log(end+1,1) = s.current;
+            continue;
+        end
+
         t_log(end+1,1)      = s.t;
         pos_log(end+1,1:3)  = reshape(s.pos_est,1,3);
         vel_log(end+1,1:3)  = reshape(s.vel_est,1,3);
@@ -327,6 +339,21 @@ if ~isempty(t_log)
     ylabel('NIS');
     title('EKF Health vs Time');
     legend('NIS','Mean NIS');
+
+    % Battery logs
+    if ~isempty(batt_t_log)
+        [batt_t_log, batt_order] = sort(batt_t_log);
+        batt_v_log = batt_v_log(batt_order);
+        batt_c_log = batt_c_log(batt_order);
+
+        figure('Name','Telemetry Log - Battery'); clf;
+        subplot(2,1,1);
+        plot(batt_t_log, batt_v_log, 'LineWidth', 1.2);
+        grid on; xlabel('t [s]'); ylabel('Voltage [mV]'); title('Battery Voltage vs Time');
+        subplot(2,1,2);
+        plot(batt_t_log, batt_c_log, 'LineWidth', 1.2);
+        grid on; xlabel('t [s]'); ylabel('Current [mA]'); title('Battery Current vs Time');
+    end
 
     % ============================================================
     % NEW: Actual vs Ideal distribution comparison (m = 4)

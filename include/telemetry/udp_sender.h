@@ -54,6 +54,8 @@ public:
         const double NIS,
         const Vec<4>& PWMcmd);
 
+    bool sendBattery(double t, double voltage, double current);
+
 private:
     bool sendJson_(const nlohmann::json& j);
     void closeSocket_() noexcept;
