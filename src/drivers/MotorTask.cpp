@@ -1,4 +1,6 @@
-#include "MotorTask.h"
+#include "drivers/MotorTask.h"
+#include "drivers/MotorDriver.h"
+#include "simulator/MotorModel.h"
 #include <iostream>
 
 template <typename MotorType>
@@ -73,3 +75,7 @@ void MotorTask<MotorType>::loop() {
         std::this_thread::sleep_until(next_loop_time);
     }
 }
+
+// Explicit template instantiations
+template class MotorTask<MotorDriver>;
+template class MotorTask<MotorModel>;

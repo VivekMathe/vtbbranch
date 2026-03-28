@@ -43,5 +43,3 @@ private:
     std::chrono::steady_clock::time_point last_time_;
     bool motorInit_ = true;
 };
-
-#include "MotorTask.tpp"
