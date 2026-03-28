@@ -70,7 +70,6 @@ int main() {
 
     bool autopilot = false;
     bool printOn = true;
-    bool armed = false;
     bool motorInit = true;
     double armTime = 0.0;
 
@@ -163,12 +162,14 @@ int main() {
             rcPWM = rcin.read_ppm_vector();
 
             if (rcPWM(4) > 1500.0) {
-                armed = true;
                 armTime += clock.taskClock.keys;
+                if (armTime >= 5.0) {
+                    motdrv.arm();
+                }
             }
             else {
-                armed = false;
                 armTime = 0.0;
+                motdrv.disarm();
             }
 
             if (rcPWM(5) > 1750) {
@@ -191,7 +192,7 @@ int main() {
 
             clock.taskClock.keys = 0.0;
 
-            if (armed) {
+            if (motdrv.isArmed()) {
                 manPsi = rcPsi;
                 manVel = rcVel; // 1m/s max speed in each direction 
             }
@@ -292,22 +293,18 @@ int main() {
 
                 pwmCmd = mixer.thr2PWM(thrustCmd); //this will go directly to the four motors
 
-                if (!armed || (armTime < 5.0)) {
-                    pwmCmd = Vec<4>::Constant(1000.0);
-                }
-
                 clock.taskClock.conInner = 0.0;
 
                 // ----------------Real Commands -------------
 
-                if (armed) {
+                if (motdrv.isArmed()) {
                     motdrv.command(pwmCmd); //takes in four for motors 1 2 3 4 pwmCmd
                 }
-                else if (motorInit && !armed) {
+                else if (motorInit && !motdrv.isArmed()) {
                     motdrv.wind_down();
                     motorInit = false;
                 }
-                else if (!motorInit && !armed) {
+                else if (!motorInit && !motdrv.isArmed()) {
                     //do nothing; <-- wow douchebagself really put a semicolon on a comment...
                 }
             }
@@ -322,7 +319,7 @@ int main() {
                 ts.phase = static_cast<int>(MM.out.phase);
                 ts.mode = static_cast<int>(MM.out.mode);
                 ts.attCmd = outer.out.attCmd;
-                ts.armed = armed;
+                ts.armed = motdrv.isArmed();
                 ts.NIS = NIS;
                 ts.PWMcmd = pwmCmd;
                 telemetry_task.updateState(ts);
@@ -353,7 +350,7 @@ int main() {
                     << "  Time [s]: " << std::setw(8) << t
                     << " Rate [Hz]: " << std::setw(8) << Hz
                     << "      Mode: " << std::setw(8) << static_cast<int>(MM.out.mode)
-                    << "     Armed: " << std::setw(8) << armed << "\n"
+                    << "     Armed: " << std::setw(8) << motdrv.isArmed() << "\n"
                     << "--------------------------------------------------------------\n"
 
                     << " NAV (EKF)\n"
