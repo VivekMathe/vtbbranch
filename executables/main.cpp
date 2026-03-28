@@ -2,6 +2,7 @@
 #include <iomanip>
 #include "common/TimeKeeper.h"
 #include "common/MathUtils.h"
+#include "common/LowPass.h"
 #include "control/InnerLoop.h"
 #include "control/OuterLoop.h"
 #include "control/QuadMixer.h"
@@ -27,6 +28,7 @@ int main() {
     InnerLoop inner;
     QuadMixer mixer;
     UdpSender udp("127.0.0.1", 8080); //KINETIC 192.168.1.2
+    TelemetryState ts;
 
     TelemetryTask telemetry_task(udp);
     std::thread telemetry_thread(&TelemetryTask::loop, &telemetry_task);
@@ -35,14 +37,18 @@ int main() {
     rcin.initialize();
 
     MotorDriver motdrv;
+    motdrv.initialize();
 
     IMUHandler imuReal;
     Vec<12> imuStats = imuReal.initialize(); //(mgx,mgy,mgz,max,may,maz,siggx,siggy,siggz,sigax,sigay,sigaz)
     imuStats(5) = imuStats(5) + g;
     AHRS ahrs(imuStats.segment<6>(0));
-    EKF ekf; // add bias constructor
+    EKF ekf(imuStats.segment<6>(0)); // add bias constructor
     MocapHandler mocap;
     bool mocapInit = mocap.init();
+
+    ImuLpf ekf_filter(952.0f, 80.0f);
+    ImuLpf ctrl_filter(952.0f, 160.0f);
 
     //init vars
     double lastPrint = 0.0;
@@ -64,8 +70,8 @@ int main() {
 
     bool autopilot = false;
     bool printOn = true;
-    bool armed = true;
-    bool motorInit = false;
+    bool armed = false;
+    bool motorInit = true;
     double armTime = 0.0;
 
     double NIS = 4.0;
@@ -92,6 +98,11 @@ int main() {
         if (clock.taskClock.imu >= clock.rates.imu) {
             imuReal.update();
             clock.taskClock.imu = 0.0;
+            Vec<6> raw;
+            raw.segment<3>(0) = imuReal.imu.accel;
+            raw.segment<3>(3) = imuReal.imu.gyro;
+            ekf_filter.update(raw);
+            ctrl_filter.update(raw);
         }
 
         if (clock.taskClock.opti >= clock.rates.opti) {
@@ -101,17 +112,17 @@ int main() {
 
         // ---------------- EKF ----------------
 
-        if (!ekf.init) {
+        if (!ekf.init && mocapInit) {
             ekf.initializeFromOpti(mocap.opti);
             ekf.init = true;
         }
 
         if (clock.taskClock.navPred >= clock.rates.navPred) {
-            ekf.predict(imuReal.imu, clock.taskClock.navPred);
+            ekf.predict(ekf_filter.output(), clock.taskClock.navPred);
             clock.taskClock.navPred = 0.0;
         }
 
-        if (clock.taskClock.navCorr >= clock.rates.navCorr) {
+        if ((clock.taskClock.navCorr >= clock.rates.navCorr) && mocap.m_valid) {
             ekf.correct(mocap.opti);
 
             NIS = ekf.getHealth();
@@ -209,11 +220,11 @@ int main() {
 
             // ---------------- AHRS ------------------------
             if (!ahrs.init) {
-                ahrs.initializeFromAccel(imuReal.imu.accel);
+                ahrs.initializeFromAccel(ctrl_filter.output().segment<3>(0));
                 ahrs.init = true;
             }
             if (clock.taskClock.AHRS >= clock.rates.AHRS) {
-                ahrs.update(imuReal.imu.accel, imuReal.imu.gyro, clock.taskClock.AHRS);
+                ahrs.update(ctrl_filter.output().segment<3>(0), ctrl_filter.output().segment<3>(3), clock.taskClock.AHRS);
                 clock.taskClock.AHRS = 0.0;
             }
 
@@ -234,7 +245,7 @@ int main() {
                             outer.out.attCmd,
                             0.0,
                             navState.segment<3>(0),
-                            imuReal.imu.gyro,
+                            ctrl_filter.output().segment<3>(3),
                             clock.taskClock.conInner);
                 }
                 else if (!autopilot && ekfHealthy) {
@@ -243,7 +254,7 @@ int main() {
                             outer.out.attCmd,
                             manPsi,
                             navState.segment<3>(0),
-                            imuReal.imu.gyro,
+                            ctrl_filter.output().segment<3>(3),
                             clock.taskClock.conInner);
                 }
                 else if (!autopilot && !ekfHealthy) {
@@ -253,7 +264,7 @@ int main() {
                             attManual,
                             manPsi,
                             AHRSAtt,
-                            imuReal.imu.gyro, clock.taskClock.conInner);
+                            ctrl_filter.output().segment<3>(3), clock.taskClock.conInner);
 
                     double den = cos(AHRSAtt(0)) * cos(AHRSAtt(1));
                     den = clamp(den, 0.2, 1.0);
@@ -267,7 +278,7 @@ int main() {
                             Vec<3>::Zero(),
                             0.0,
                             AHRSAtt,
-                            imuReal.imu.gyro,
+                            ctrl_filter.output().segment<3>(3),
                             clock.taskClock.conInner);
                     outer.out.Fz = mass * g;
                 }
@@ -289,11 +300,7 @@ int main() {
 
                 // ----------------Real Commands -------------
 
-                if (!motorInit && armed && (pwmCmd.array() <= 1001).all()) {
-                    motdrv.initialize();
-                    motorInit = true;
-                }
-                else if (motorInit && armed) {
+                if (armed) {
                     motdrv.command(pwmCmd); //takes in four for motors 1 2 3 4 pwmCmd
                 }
                 else if (motorInit && !armed) {
@@ -306,19 +313,21 @@ int main() {
             }
 
             // ---------------- Telemetry -----------------
-            TelemetryState ts;
-            ts.t = t;
-            ts.dt = dt;
-            ts.Hz = Hz;
-            ts.navState = navState;
-            ts.posCmd = MM.out.posCmd;
-            ts.phase = static_cast<int>(MM.out.phase);
-            ts.mode = static_cast<int>(MM.out.mode);
-            ts.attCmd = outer.out.attCmd;
-            ts.armed = armed;
-            ts.NIS = NIS;
-            ts.PWMcmd = pwmCmd;
-            telemetry_task.updateState(ts);
+            if (clock.taskClock.tele >= clock.rates.tele) {
+                ts.t = t;
+                ts.dt = dt;
+                ts.Hz = Hz;
+                ts.navState = navState;
+                ts.posCmd = MM.out.posCmd;
+                ts.phase = static_cast<int>(MM.out.phase);
+                ts.mode = static_cast<int>(MM.out.mode);
+                ts.attCmd = outer.out.attCmd;
+                ts.armed = armed;
+                ts.NIS = NIS;
+                ts.PWMcmd = pwmCmd;
+                telemetry_task.updateState(ts);
+                clock.taskClock.tele = 0.0;
+            }
 
             // ---------------- Console Print ----------------
             if (t - lastPrint >= printDt && printOn) {
@@ -335,7 +344,6 @@ int main() {
 
                 const Vec<3> gyro = imuReal.imu.gyro;
                 const Vec<3> accel = imuReal.imu.accel;
-                const Vec<12> imuStat = Vec<12>::Zero();
 
                 const Vec<3> optPos = mocap.opti.pos;
                 const double optPsi = mocap.opti.psi;
@@ -406,7 +414,7 @@ int main() {
 
                     << " SENSORS\n"
                     << "   IMU Stats : "
-                    << std::setw(8) << imuStat.transpose() << "\n"
+                    << std::setw(8) << imuStats.transpose() << "\n"
                     << "   IMU Gyro  [x y z] : "
                     << std::setw(8) << gyro(0) << " "
                     << std::setw(8) << gyro(1) << " "

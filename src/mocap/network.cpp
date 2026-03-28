@@ -8,7 +8,7 @@
 #include "mocap/network.h"
 
 #define BSD_BASE_PORT 0
-#define MYNAME "192.168.1.6"     // my IP address (onboard computer)
+#define MYNAME "192.168.1.2"     // my IP address (onboard computer)
 #define REMOTENAME "192.168.1.5" // IP address from the desktop in 001
 #define THISPORTNUM 9001
 
@@ -182,27 +182,32 @@ int openPort( void ) {
 	return 0;
 }
 
-static int readSock( struct port_ref *s, void *buf, int nbytes ) {
-	int totalNew = 0;
-  if( s->portIsOpen ) {
-		int toread = 0, status;
-		socklen_t sizeofsockaddr = sizeof(struct sockaddr);
-		memcpy( &ra, &bra, sizeof(bra) );
-    do {
-        status = ioctl( s->fd, FIONREAD, &toread );
-        if( status == -1 ) {
-            printf( "network: problem receiving\n" );
-            return totalNew;
-        }
-        status = recvfrom( s->fd, (char*)buf, (toread<nbytes?toread:nbytes),  0, (struct sockaddr*)(&ra), &sizeofsockaddr );
-        if( status > 0 ) {
-            buf = (void*)( (char*)buf + status );
-            totalNew += status;
-            s->received += status;
-        }
-    } while( status > 0 );
-	}
-  return totalNew;
+static int readSock(struct port_ref* s, void* buf, int nbytes) {
+    int totalNew = 0;
+    if (s->portIsOpen) {
+        int toread = 0, status;
+        socklen_t sizeofsockaddr = sizeof(struct sockaddr);
+        memcpy(&ra, &bra, sizeof(bra));
+        do {
+            status = ioctl(s->fd, FIONREAD, &toread);
+            if (status == -1) {
+                printf("network: problem receiving\n");
+                return totalNew;
+            }
+
+            // Abort if our local buffer is out of space
+            if (nbytes <= 0) break;
+
+            status = recvfrom(s->fd, (char*)buf, (toread < nbytes ? toread : nbytes), 0, (struct sockaddr*)(&ra), &sizeofsockaddr);
+            if (status > 0) {
+                buf = (void*)((char*)buf + status);
+                totalNew += status;
+                s->received += status;
+                nbytes -= status; // CRITICAL: Reduce available space
+            }
+        } while (status > 0);
+    }
+    return totalNew;
 }
 
 int readDatalink( ) {
@@ -243,6 +248,7 @@ int readDatalink( ) {
               case DATALINK_MESSAGE_OPTITRACK:
                 if( datalinkHeader.messageSize == sizeof( struct onboardMocapClient_ref ) ) {
                     memcpy( &onboardMocapClient, bf, datalinkHeader.messageSize );
+/*
                     printf("Pos_x=%.2f\n",onboardMocapClient.pos_x);
                     printf("Pos_y=%.2f\n",onboardMocapClient.pos_y);
                     printf("Pos_z=%.2f\n",onboardMocapClient.pos_z);
@@ -252,10 +258,11 @@ int readDatalink( ) {
                     printf("qw=%.2f\n",onboardMocapClient.qw);
                     printf("frameNum=%d\n",onboardMocapClient.frameNum);
                     printf("Valid=%d\n",onboardMocapClient.valid);
+*/
                     gotPacket = 1;
                 }
-              break;
-            }
+              break; 
+           }
           }
           index += datalinkHeader.messageSize - 1;
         } else {

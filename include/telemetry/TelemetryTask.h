@@ -5,7 +5,6 @@
 #include <atomic>
 #include <chrono>
 #include "telemetry/udp_sender.h"
-#include "sensors/BatteryHandler.h"
 
 // Define a struct to hold all telemetry data safely
 struct TelemetryState {
@@ -41,6 +40,4 @@ private:
     TelemetryState current_state_;
     std::mutex state_mutex_;
     std::atomic<bool> running_{true};
-    BatteryHandler battery_handler_;
-    std::chrono::steady_clock::time_point last_battery_time_;
 };

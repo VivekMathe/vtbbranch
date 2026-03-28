@@ -17,12 +17,29 @@ EKF::EKF() {
     P.setZero();
 }
 
+EKF::EKF(const Vec<6>& bias) {
+    // Build continuous-time Qc (12x12): [n_g; n_a; n_ba; n_bw]
+    Qc.setZero();
+    Qc.diagonal() <<
+        sig_g * sig_g, sig_g* sig_g, sig_g* sig_g,
+        sig_acc* sig_acc, sig_acc* sig_acc, sig_acc* sig_acc,
+        sig_ba_walk* sig_ba_walk, sig_ba_walk* sig_ba_walk, sig_ba_walk* sig_ba_walk,
+        sig_bw_walk* sig_bw_walk, sig_bw_walk* sig_bw_walk, sig_bw_walk* sig_bw_walk;
+
+    Rpos = (sig_pos * sig_pos) * Mat<3, 3>::Identity();
+    Rpsi = (sig_psi * sig_psi);
+
+    x_est.setZero();
+    x_est.segment<3>(9) = bias.segment<3>(3);
+    x_est.segment<3>(12) = bias.segment<3>(0);
+    P.setZero();
+}
+
 void EKF::initializeFromOptiImpl(const OptiMeas& opti) {
     const double phi0 = 0.0;
     const double th0 = 0.0;
     const double psi0 = wrapToPi(opti.psi);
 
-    x_est.setZero();
     x_est(PHI) = phi0;
     x_est(THETA) = th0;
     x_est(PSI) = psi0;
@@ -115,7 +132,7 @@ void EKF::correctImpl(const OptiMeas& opti) {
 
     // health update
     double nis = res.transpose() * S.ldlt().solve(res);
-    const double alpha = 0.95;
+    const double alpha = 0.19;
 
     if (!nisInit) {
         nisAvg = nis;
@@ -382,7 +399,7 @@ double EKF::h_psi(const Vec<NX>& x) const {
     return x(PSI);
 }
 
-// ------------------- Hpos numeric (central diff) -------------------
+// ------------------- Hpos numeric (not using anymore) -------------------
 Mat<3, EKF::NX> EKF::computeHpos(const Vec<NX>& x) const {
     Mat<3, NX> H = Mat<3, NX>::Zero();
 

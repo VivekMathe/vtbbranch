@@ -3,8 +3,12 @@
 
 #include "common/MathUtils.h"
 #include "sensors/ImuSim.h"
-#include "sensors/IMUHandler.h"
-#include "mocap/mocapHandler.h"
+
+#ifdef PLATFORM_LINUX
+    #include "sensors/IMUHandler.h"
+    #include "mocap/mocapHandler.h"
+#endif
+
 #include "sensors/OptiSim.h"
 
 class EKF {
@@ -22,13 +26,14 @@ public:
 
     EKF();
 
+    EKF(const Vec<6>& bias);
+
     bool init = false;
 
     template<typename OptiT>
     void initializeFromOpti(const OptiT& opti);
 
-    template<typename ImuT>
-    void predict(const ImuT& imu, double dt);
+    void predict(const Vec<6>& imu, double dt);
 
     template<typename OptiT>
     void correct(const OptiT& opti);
@@ -62,12 +67,12 @@ private:
     // process noise (continuous-time)
     double sig_g = 0.00017678;
     double sig_acc = 0.0010607;
-    double sig_ba_walk = 0;
-    double sig_bw_walk = 0;
+    double sig_ba_walk = 1e-4;
+    double sig_bw_walk = 1e-6;
 
     // measurement noise
-    double sig_pos = 0.001;
-    double sig_psi = 0.001;
+    double sig_pos = 0.0001;
+    double sig_psi = 0.0001;
 
     // numerics
     double eps_F = 1e-6;
@@ -122,12 +127,11 @@ void EKF::initializeFromOpti(const OptiT& opti)
     initializeFromOptiImpl(z);
 }
 
-template<typename ImuT>
-void EKF::predict(const ImuT& imu, double dt)
+inline void EKF::predict(const Vec<6>& imu, double dt)
 {
     ImuMeas u;
-    u.gyro = imu.gyro;
-    u.accel = imu.accel;
+    u.gyro = imu.segment<3>(3);
+    u.accel = imu.segment<3>(0);
     predictImpl(u, dt);
 }
 
