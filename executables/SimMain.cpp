@@ -74,7 +74,6 @@ int main() {
     bool printOn = false;
 
     bool autopilot = true;
-    bool armed = true;
     bool motorInit = false;
     double armTime = 0.0;
 
@@ -205,10 +204,15 @@ int main() {
                 keyPsi = 0;
             }
 
-            if (armed) {
+            // Simulate armed behavior for Windows testing where RC is not available
+            armTime += clock.taskClock.keys;
+            if (armTime >= 5.0) {
+                motormodel.arm();
+            }
+
+            if (motormodel.isArmed()) {
                 manVel = keyVel;
                 manPsi = keyPsi;
-                armTime += clock.taskClock.keys;
             }
 
             clock.taskClock.keys = 0.0;
@@ -225,12 +229,14 @@ int main() {
             rcPWM = rcin.read_ppm_vector();
 
             if (rcPWM(4) > 1500.0) {
-                armed = true;
                 armTime += clock.taskClock.keys;
+                if (armTime >= 5.0) {
+                    motormodel.arm();
+                }
             }
             else {
-                armed = false;
                 armTime = 0.0;
+                motormodel.disarm();
             }
 
             if (rcPWM(5) > 1750) {
@@ -253,7 +259,7 @@ int main() {
 
             clock.taskClock.keys = 0.0;
 
-            if (armed) {
+            if (motormodel.isArmed()) {
                 manPsi = rcPsi;
                 manVel = rcVel; // 1m/s max speed in each direction 
             }
@@ -351,19 +357,12 @@ int main() {
 
             pwmCmd = mixer.thr2PWM(thrustCmd); //this will go directly to the four motors
 
-            if (!armed || (armTime < 5.0)) {
-                pwmCmd = Vec<4>::Constant(1000.0);
-            }
-
             clock.taskClock.conInner = 0.0;
 
         }
 
         // ---------------- Simulation ----------------
         if (clock.taskClock.sim >= clock.rates.sim) {
-            if (!armed) {
-                thrustCmd = Vec<4>::Zero();
-            }
             thrustAct = motormodel.step(clock.taskClock.sim, thrustCmd);
             wrenchAct = mixer.mix2Wrench(thrustAct);
 
@@ -388,7 +387,7 @@ int main() {
                 static_cast<int>(MM.out.phase),
                 static_cast<int>(MM.out.mode),
                 outer.out.attCmd,
-                armed,
+                motormodel.isArmed(),
                 NIS,
                 pwmCmd
             );
@@ -420,7 +419,7 @@ int main() {
                 << "  Time [s]: " << std::setw(8) << t
                 << " Rate [Hz]: " << std::setw(8) << Hz
                 << "      Mode: " << std::setw(8) << static_cast<int>(MM.out.mode)
-                    << "     Armed: " << std::setw(8) << armed << "\n"
+                    << "     Armed: " << std::setw(8) << motormodel.isArmed() << "\n"
                     << "--------------------------------------------------------------\n"
 
                     << " NAV (EKF)\n"
