@@ -4,7 +4,7 @@
 #include <iostream>
 
 template <typename MotorType>
-MotorTask<MotorType>::MotorTask(MotorType& motor) : motor_(motor), armTime_(0.0), motorInit_(true) {
+MotorTask<MotorType>::MotorTask(MotorType& motor) : motor_(motor), armTime_(0.0) {
     last_time_ = std::chrono::steady_clock::now();
 }
 
@@ -63,11 +63,9 @@ void MotorTask<MotorType>::loop() {
         // Real Commands (Simulated or Real Hardware)
         if (isArmedCached_.load()) {
             motor_.command(state_copy.pwmCmd); // Takes in four motors 1 2 3 4 pwmCmd
-        } else if (motorInit_ && !isArmedCached_.load()) {
-            motor_.wind_down();
-            motorInit_ = false;
-        } else if (!motorInit_ && !isArmedCached_.load()) {
-            // do nothing;
+        } else {
+            // motor_.disarm() internally handles wind_down() on transition
+            // So we simply do nothing here while continuously disarmed
         }
 
         // Sleep to maintain ~400Hz loop rate (2.5ms = 2500 microseconds) using sleep_until
