@@ -18,6 +18,7 @@
 #include "sensors/OptiSim.h"
 #include "simulator/Dynamics.h"
 #include "simulator/MotorModel.h"
+#include "drivers/MotorTask.h"
 #include "telemetry/udp_sender.h"
 #include "estimation/AHRS.h"
 
@@ -40,6 +41,10 @@ int main() {
     InnerLoop inner;
     QuadMixer mixer;
     MotorModel motormodel;
+
+    MotorTask<MotorModel> motor_task(motormodel);
+    std::thread motor_thread(&MotorTask<MotorModel>::loop, &motor_task);
+
     UdpSender udp("127.0.0.1", 8080); //KINETIC 192.168.1.2
     
 #ifdef PLATFORM_LINUX
@@ -74,8 +79,6 @@ int main() {
     bool printOn = false;
 
     bool autopilot = true;
-    bool motorInit = false;
-    double armTime = 0.0;
 
     double NIS = 4.0;
     bool ekfHealthy = false;
@@ -205,12 +208,7 @@ int main() {
             }
 
             // Simulate armed behavior for Windows testing where RC is not available
-            armTime += clock.taskClock.keys;
-            if (armTime >= 5.0) {
-                motormodel.arm();
-            }
-
-            if (motormodel.isArmed()) {
+            if (motor_task.isArmed()) {
                 manVel = keyVel;
                 manPsi = keyPsi;
             }
@@ -227,17 +225,6 @@ int main() {
             double rcPsi = 0.0;
 
             rcPWM = rcin.read_ppm_vector();
-
-            if (rcPWM(4) > 1500.0) {
-                armTime += clock.taskClock.keys;
-                if (armTime >= 5.0) {
-                    motormodel.arm();
-                }
-            }
-            else {
-                armTime = 0.0;
-                motormodel.disarm();
-            }
 
             if (rcPWM(5) > 1750) {
                 //drop stuff
@@ -259,7 +246,7 @@ int main() {
 
             clock.taskClock.keys = 0.0;
 
-            if (motormodel.isArmed()) {
+            if (motor_task.isArmed()) {
                 manPsi = rcPsi;
                 manVel = rcVel; // 1m/s max speed in each direction 
             }
@@ -359,6 +346,7 @@ int main() {
 
             clock.taskClock.conInner = 0.0;
 
+            motor_task.updateState(pwmCmd, rcPWM(4));
         }
 
         // ---------------- Simulation ----------------
@@ -387,7 +375,7 @@ int main() {
                 static_cast<int>(MM.out.phase),
                 static_cast<int>(MM.out.mode),
                 outer.out.attCmd,
-                motormodel.isArmed(),
+                motor_task.isArmed(),
                 NIS,
                 pwmCmd
             );
@@ -419,7 +407,7 @@ int main() {
                 << "  Time [s]: " << std::setw(8) << t
                 << " Rate [Hz]: " << std::setw(8) << Hz
                 << "      Mode: " << std::setw(8) << static_cast<int>(MM.out.mode)
-                    << "     Armed: " << std::setw(8) << motormodel.isArmed() << "\n"
+                    << "     Armed: " << std::setw(8) << motor_task.isArmed() << "\n"
                     << "--------------------------------------------------------------\n"
 
                     << " NAV (EKF)\n"
@@ -535,5 +523,10 @@ int main() {
 	//usleep(1);
 #endif
     //std::this_thread::yield();
+    }
+
+    motor_task.stop();
+    if (motor_thread.joinable()) {
+        motor_thread.join();
     }
 }
