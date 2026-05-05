@@ -1,19 +1,27 @@
 #include "guidance/ModeManager.h"
-
+ModeManager::ModeManager() {
+}
+ModeManager::ModeManager(bool test) {
+	simplemission = test; //this is for simple milestone flight
+	}
 void ModeManager::update() {
-	double surveyAlt = -2.0;
-	double lowAlt = -0.5;
+	double surveyAlt = -1.5;
+	double lowAlt = -.75;
 
-	if (!init) {
+	if (!init)
+	{ 
 		init = true;
 		toCmd(0) = in.state(3);
 		toCmd(1) = in.state(4);
 		toCmd(2) = surveyAlt;
-	}
+		lndCmd(2)= -.15;
+		//lndCmd(2) = -0.25;
+}
 
 	out.phaseTime += in.dt;
-
-	switch (out.phase) {
+	if (!simplemission)
+	{
+		switch (out.phase) {
 		case MissionPhase::Takeoff:
 			out.mode = NavMode::Waypoint;
 			out.posCmd = toCmd;
@@ -22,7 +30,7 @@ void ModeManager::update() {
 				advancePhase(MissionPhase::Search);
 			}
 			break;
-		case MissionPhase::Search: 
+		case MissionPhase::Search:
 			out.mode = NavMode::Sweep;
 			out.posCmd = in.state.segment<3>(3);
 			if (in.detected) {
@@ -41,7 +49,7 @@ void ModeManager::update() {
 			out.mode = NavMode::Waypoint;
 			out.posCmd.segment<2>(0) = in.targPos.segment<2>(0);
 			out.posCmd(2) = surveyAlt;
-			if (reachedWaypoint(in.state.segment<6>(3), out.posCmd) && out.phaseTime >= 5.0) {
+			if (reachedWaypoint(in.state.segment<6>(3), out.posCmd) && out.phaseTime >= 10.0) {
 				advancePhase(MissionPhase::DescendToTarget);
 			}
 			break;
@@ -49,8 +57,10 @@ void ModeManager::update() {
 			out.mode = NavMode::Waypoint;
 			out.posCmd.segment<2>(0) = in.targPos.segment<2>(0);
 			out.posCmd(2) = lowAlt;
-			if (reachedWaypoint(in.state.segment<6>(3),out.posCmd) && in.drop) {
+			if (reachedWaypoint(in.state.segment<6>(3), out.posCmd) && out.phaseTime >= 5.0) {
 				computelndCmd(in.state.segment<3>(3));
+				advancePhase(MissionPhase::GoToLand);
+				in.drop = true;
 			}
 			break;
 		case MissionPhase::GoToLand:
@@ -64,8 +74,8 @@ void ModeManager::update() {
 		case MissionPhase::DescendToLand:
 			out.mode = NavMode::Waypoint;
 			out.posCmd.segment<2>(0) = lndCmd.segment<2>(0);
-			out.posCmd(2) = 0.0;
-			if (reachedWaypoint(in.state.segment<6>(3), out.posCmd) && out.phaseTime >= 5.0) {
+			out.posCmd(2) = lndCmd(2);
+			if (reachedWaypoint(in.state.segment<6>(3), out.posCmd) || (out.phaseTime >= 5.0 && in.state(5) >= -0.2)) {
 				advancePhase(MissionPhase::Terminate);
 			}
 			break;
@@ -73,12 +83,57 @@ void ModeManager::update() {
 			out.mode = NavMode::Waypoint;
 			out.posCmd = in.state.segment<3>(3);
 			break;
+		}
+	}
+	else
+	{
+		switch (out.phase) {
+		case MissionPhase::Takeoff:
+			out.mode = NavMode::Waypoint;
+			out.posCmd = toCmd;
+			out.posCmd(2) = lowAlt;
+			if (reachedWaypoint(in.state.segment<6>(3), out.posCmd)) {
+				advancePhase(MissionPhase::Hover);
+			}
+			break;
+		case MissionPhase::Hover:
+			out.mode = NavMode::Waypoint;
+			out.posCmd = toCmd;
+			out.posCmd(2) = lowAlt;
+			if (reachedWaypoint(in.state.segment<6>(3), out.posCmd) && out.phaseTime >= 5.0) {
+				advancePhase(MissionPhase::GoToTarget);
+			}
+			break;
+		case MissionPhase::GoToTarget:
+			out.mode = NavMode::Waypoint;
+			in.targPos << 3.28, 2.23, lowAlt;
+			out.posCmd.segment<2>(0) = in.targPos.segment<2>(0);
+			out.posCmd(2) = lowAlt;
+			if (reachedWaypoint(in.state.segment<6>(3), out.posCmd) && out.phaseTime >= 15.0) {
+				advancePhase(MissionPhase::DescendToLand);
+			}
+			break;
+		case MissionPhase::DescendToLand:
+			out.mode = NavMode::Waypoint;
+			in.targPos << 3.28, 2.23, lowAlt;
+			lndCmd.segment<2>(0) = in.targPos.segment<2>(0);
+			out.posCmd.segment<2>(0) = lndCmd.segment<2>(0);
+			out.posCmd(2) = lndCmd(2);
+			if (reachedWaypoint(in.state.segment<6>(3), out.posCmd) || (out.phaseTime >= 10 && in.state(5) > -0.2)) {
+				advancePhase(MissionPhase::Terminate);
+			}
+			break;
+		case MissionPhase::Terminate:
+			out.mode = NavMode::Waypoint;
+			out.posCmd = in.state.segment<3>(3);
+			break;
+		}
 	}
 }
 
 bool ModeManager::reachedWaypoint(const Vec<6>&state,const Vec<3>& cmd) {
-	double posErr = (cmd - state.segment<3>(0)).norm();
-	double velErr = state.segment<3>(3).norm();
+	double posErr = (cmd - state.segment<3>(0)).cwiseAbs().maxCoeff();
+	double velErr = state.segment<3>(3).cwiseAbs().maxCoeff();
 
 	return (posErr < posTol) && (velErr < velTol);
 }

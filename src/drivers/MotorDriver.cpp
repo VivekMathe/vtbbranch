@@ -9,8 +9,12 @@
 // End Code control over motors at the end: motors.wind_down()
 
 
-MotorDriver::MotorDriver() {
+MotorDriver::MotorDriver(int calib) {
     // Direct instantiation for Navio2
+    initialize();
+    if(calib) {
+	calibrate();
+    }
 }
 
 MotorDriver::~MotorDriver() {
@@ -18,20 +22,17 @@ MotorDriver::~MotorDriver() {
 }
 
 bool MotorDriver::initialize() {
-    for (int pin : motor_pins) {
+    for (int pin : {0,1,2,3,4}) {
         pwm_driver.initialize(pin);
         pwm_driver.set_frequency(pin, PWM_FREQ);
         usleep(50000);
         pwm_driver.enable(pin);
     }
 
-    for (int pin : motor_pins) {
-        pwm_driver.set_duty_cycle(pin, (float)PWM_MIN);
-    }
+    pwm_driver.set_duty_cycle(4, (float)PWM_MIN);
+ 
+    usleep(50000); 
 
-    //calibrate();  //shouldn't need this because it might cause the motors to command 2000 PWM if already calibrated. Need to test again. 
-
-    usleep(50000);
     return true;
 }
 
@@ -84,6 +85,11 @@ void MotorDriver::command(const Vec<4>& pwm_values) {
 
         pwm_driver.set_duty_cycle(motor_pins[i], static_cast<float>(commanded));
     }
+}
+
+void MotorDriver::commandServo(double pwm_values) {
+        double commanded = std::clamp(pwm_values, (double)PWM_MIN, (double)PWM_MAX);
+        pwm_driver.set_duty_cycle(4, static_cast<float>(commanded));
 }
 
 void MotorDriver::wind_down()

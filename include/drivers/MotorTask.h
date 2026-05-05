@@ -10,6 +10,7 @@
 struct MotorState {
     Vec<4> pwmCmd = Vec<4>::Zero();
     double arm_switch_pwm = 0.0;
+    double servo_pwm = 0.0;
 };
 
 // Template class to accept either MotorDriver or MotorModel
@@ -20,7 +21,7 @@ public:
     ~MotorTask();
 
     // Copy latest state from main loop
-    void updateState(const Vec<4>& pwmCmd, double arm_switch_pwm);
+    void updateState(const Vec<4>& pwmCmd, double arm_switch_pwm, double servo_pwm);
 
     // Run the motor background loop
     void loop();
@@ -38,7 +39,7 @@ private:
     std::mutex state_mutex_;
     std::atomic<bool> running_{true};
 
-    // Timer for the 5-second arming rule
-    double armTime_ = 0.0;
+    // Time elapsed since entering armed state
+    double armedTime_ = 0.0;
     std::chrono::steady_clock::time_point last_time_;
 };

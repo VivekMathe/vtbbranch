@@ -1,6 +1,9 @@
 #include "telemetry/TelemetryTask.h"
+#include <vector>
 
-TelemetryTask::TelemetryTask(UdpSender& udp_sender) : udp_(udp_sender) {
+// Initialize the vision_buffer_ reference
+TelemetryTask::TelemetryTask(UdpSender& udp_sender, VisionGridBuffer& vision_buf) 
+    : udp_(udp_sender), vision_buffer_(vision_buf) {
 }
 
 TelemetryTask::~TelemetryTask() {
@@ -26,6 +29,9 @@ void TelemetryTask::loop() {
             std::lock_guard<std::mutex> lock(state_mutex_);
             state_copy = current_state_;
         }
+        const Eigen::Vector2d battery_data = battery_handler_.read_battery();
+        const double battery_voltage_mv = battery_data(0);
+        const double battery_current_ma = battery_data(1);
 
         // We use the modified sendFromSim that takes primitives
         udp_.sendFromSim(
@@ -39,7 +45,21 @@ void TelemetryTask::loop() {
             state_copy.attCmd,
             state_copy.armed,
             state_copy.NIS,
-            state_copy.PWMcmd
+            state_copy.res,
+            state_copy.PWMcmd,
+            battery_voltage_mv,
+            battery_current_ma
         );
+
+        std::vector<int> hot_cells;
+        std::vector<int> blob_cells;
+        
+        // Attempt to consume new data from the vision thread
+        if (vision_buffer_.consume(hot_cells, blob_cells)) {
+            // Only fire off a packet if the camera actually detected heat
+            if (!hot_cells.empty()) {
+                udp_.sendVisionData(hot_cells, blob_cells);
+            }
+        }
     }
 }

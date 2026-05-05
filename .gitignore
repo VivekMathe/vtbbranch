@@ -1,2 +1,46 @@
+# =========================
+# Build artifacts
+# =========================
+out/
 build/
-build
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# =========================
+# External Libs
+# =========================
+external/eigen
+# =========================
+# Visual Studio
+# =========================
+.vs/
+*.sln
+*.vcxproj*
+*.user
+*.filters
+
+# =========================
+# Compiled binaries
+# =========================
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.obj
+*.elf
+FireMission
+FireSim
+# =========================
+# Temporary / logs
+# =========================
+*.log
+*.tmp
+
+# =========================
+# OS junk
+# =========================
+Thumbs.db
+.DS_Store

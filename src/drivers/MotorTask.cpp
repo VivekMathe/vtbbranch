@@ -2,9 +2,10 @@
 #include "drivers/MotorDriver.h"
 #include "simulator/MotorModel.h"
 #include <iostream>
+#include <type_traits>
 
 template <typename MotorType>
-MotorTask<MotorType>::MotorTask(MotorType& motor) : motor_(motor), armTime_(0.0) {
+MotorTask<MotorType>::MotorTask(MotorType& motor) : motor_(motor), armedTime_(0.0) {
     last_time_ = std::chrono::steady_clock::now();
 }
 
@@ -14,10 +15,11 @@ MotorTask<MotorType>::~MotorTask() {
 }
 
 template <typename MotorType>
-void MotorTask<MotorType>::updateState(const Vec<4>& pwmCmd, double arm_switch_pwm) {
+void MotorTask<MotorType>::updateState(const Vec<4>& pwmCmd, double arm_switch_pwm, double servo_pwm) {
     std::lock_guard<std::mutex> lock(state_mutex_);
     current_state_.pwmCmd = pwmCmd;
     current_state_.arm_switch_pwm = arm_switch_pwm;
+    current_state_.servo_pwm = servo_pwm;
 }
 
 template <typename MotorType>
@@ -35,6 +37,11 @@ void MotorTask<MotorType>::loop() {
     auto next_loop_time = std::chrono::steady_clock::now();
     last_time_ = next_loop_time;
 
+    if constexpr (std::is_same_v<MotorType, MotorDriver>) {
+        motor_.initialize();
+        std::cout << "Motors initialized. System ready to arm." << std::endl;
+    }
+
     while (running_) {
         auto current_time = std::chrono::steady_clock::now();
         std::chrono::duration<double> dt_duration = current_time - last_time_;
@@ -47,14 +54,17 @@ void MotorTask<MotorType>::loop() {
             state_copy = current_state_;
         }
 
-        // Arming logic
+        // Arming logic: arm immediately when arm switch is high.
         if (state_copy.arm_switch_pwm > 1500.0) {
-            armTime_ += dt;
-            if (armTime_ >= 5.0) {
+            if (!motor_.isArmed()) {
                 motor_.arm();
+                armedTime_ = 0.0;
+            }
+            else {
+                armedTime_ += dt;
             }
         } else {
-            armTime_ = 0.0;
+            armedTime_ = 0.0;
             motor_.disarm();
         }
 
@@ -62,10 +72,15 @@ void MotorTask<MotorType>::loop() {
 
         // Real Commands (Simulated or Real Hardware)
         if (isArmedCached_.load()) {
-            motor_.command(state_copy.pwmCmd); // Takes in four motors 1 2 3 4 pwmCmd
-        } else {
-            // motor_.disarm() internally handles wind_down() on transition
-            // So we simply do nothing here while continuously disarmed
+            if (armedTime_ < 1.0) {
+                // For the first 1 second after arming, send exactly 1000 PWM
+                motor_.command(Vec<4>::Constant(1000.0));
+            }
+            else {
+                // After 1 second, send actual commands from the mixer
+                motor_.command(state_copy.pwmCmd);
+                motor_.commandServo(state_copy.servo_pwm);
+            }
         }
 
         // Sleep to maintain ~400Hz loop rate (2.5ms = 2500 microseconds) using sleep_until
@@ -75,5 +90,9 @@ void MotorTask<MotorType>::loop() {
 }
 
 // Explicit template instantiations
+// Explicit template instantiations
+#ifdef PLATFORM_LINUX
 template class MotorTask<MotorDriver>;
+#endif
+
 template class MotorTask<MotorModel>;

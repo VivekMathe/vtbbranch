@@ -5,6 +5,8 @@
 #include <atomic>
 #include <chrono>
 #include "telemetry/udp_sender.h"
+#include "sensors/BatteryHandler.h"
+#include "vision/WildfireDetection.h"
 
 // Define a struct to hold all telemetry data safely
 struct TelemetryState {
@@ -18,12 +20,15 @@ struct TelemetryState {
     int mode = 0;
     bool armed = false;
     double NIS = 0.0;
+    Vec<4> res = Vec<4>::Zero();
     Vec<4> PWMcmd = Vec<4>::Zero();
 };
 
 class TelemetryTask {
 public:
-    TelemetryTask(UdpSender& udp_sender);
+
+    // Updated constructor to accept the vision buffer
+    TelemetryTask(UdpSender& udp_sender, VisionGridBuffer& vision_buf);
     ~TelemetryTask();
 
     // Copy latest state from main loop
@@ -37,6 +42,8 @@ public:
 
 private:
     UdpSender& udp_;
+    VisionGridBuffer& vision_buffer_;
+    BatteryHandler battery_handler_;
     TelemetryState current_state_;
     std::mutex state_mutex_;
     std::atomic<bool> running_{true};

@@ -4,6 +4,9 @@
 
 class ModeManager {
 public:
+	ModeManager();
+	ModeManager(bool);
+
 	enum class NavMode {
 		Manual,
 		Waypoint,
@@ -47,6 +50,9 @@ private:
 
 	bool init = false;
 	
+	bool simplemission = false;
+
+
 	bool reachedWaypoint(const Vec<6>& state,const Vec<3>& cmd);
 
 	void advancePhase(MissionPhase next);
@@ -58,8 +64,8 @@ private:
 
 	double clearDist = 1.5;
 
-	double velTol = 0.05;
-	double posTol = 0.05;
+	double velTol = 0.2;
+	double posTol = 0.12;
 
 	Vec<3> toCmd;
 	Vec<3> lndCmd;

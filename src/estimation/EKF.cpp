@@ -1,6 +1,6 @@
 // EKF.cpp
 #include "estimation/EKF.h"
-
+#include <iostream>
 EKF::EKF() {
     // Build continuous-time Qc (12x12): [n_g; n_a; n_ba; n_bw]
     Qc.setZero();
@@ -33,6 +33,9 @@ EKF::EKF(const Vec<6>& bias) {
     x_est.segment<3>(9) = bias.segment<3>(3);
     x_est.segment<3>(12) = bias.segment<3>(0);
     P.setZero();
+    P(0,0) = 0.00;
+    P(1,1) = 0.00;
+    P(2,2) = 0.00;
 }
 
 void EKF::initializeFromOptiImpl(const OptiMeas& opti) {
@@ -47,6 +50,7 @@ void EKF::initializeFromOptiImpl(const OptiMeas& opti) {
     // If opti measures an offset point: p_cg = z_pos - Rnb * r_OPTI
     const Mat<3, 3> Rnb0 = RotB2N(phi0, th0, psi0);
     const Vec<3> p_cg = opti.pos - Rnb0 * r_OPTI;
+    std::cout << p_cg << '\n';
 
     x_est(PN) = p_cg(0);
     x_est(PE) = p_cg(1);
@@ -104,34 +108,33 @@ void EKF::correctImpl(const OptiMeas& opti) {
 
     // z = [pos_ned; psi]
     Vec<4> z;
-    z.template head<3>() = opti.pos;
-    z(3) = wrapToPi(opti.psi);
+    z(0) = wrapToPi(opti.psi);
+    z.segment<3>(1) = opti.pos;
 
     // h(x) = [h_pos(x); h_psi(x)]
     Vec<4> h;
-    h.template head<3>() = h_pos(x_est);
-    h(3) = h_psi(x_est);
+    h.segment<3>(1) = h_pos(x_est);
+    h(0) = h_psi(x_est);
 
     // residual (wrap yaw residual)
     res = z - h;
-    res(3) = wrapToPi(res(3));
-
-    // H = [Hpos; Hpsi]
-    Mat<4, NX> H = Mat<4, NX>::Zero();
-    H.template topRows<3>() = computeHpos(x_est);
-    H(3, PSI) = 1.0;
+    res(0) = wrapToPi(res(0));
 
     // R = blkdiag(Rpos, Rpsi)
     Mat<4, 4> R = Mat<4, 4>::Zero();
-    R.template topLeftCorner<3, 3>() = Rpos;
-    R(3, 3) = Rpsi;
+    R.template bottomRightCorner<3, 3>() = Rpos;
+    R(0, 0) = Rpsi;
 
     // S, K
-    S = H * P * H.transpose() + R;
-    const Mat<NX, 4> K = P * H.transpose() * S.inverse();
+    S = P.block(2, 2, 4, 4).selfadjointView<Eigen::Lower>();
+    S += R;
 
-    // health update
-    double nis = res.transpose() * S.ldlt().solve(res);
+    Eigen::LDLT<Mat<4, 4>> S_ldlt(S);
+    const Mat<NX, 4> K = P.block(0, 2, 15, 4) * S_ldlt.solve(Mat<4,4>::Identity());
+
+    // NIS
+    double nis = res.transpose() * S_ldlt.solve(res);
+
     const double alpha = 0.19;
 
     if (!nisInit) {
@@ -142,15 +145,21 @@ void EKF::correctImpl(const OptiMeas& opti) {
         nisAvg = (1.0 - alpha) * nisAvg + alpha * nis;
     }
 
-    // Joseph form covariance update
-    const Mat<NX, NX> A = (I - K * H);
-    P = A * P * A.transpose() + K * R * K.transpose();
+
+    Mat<NX, NX> I_KH = Mat<NX, NX>::Identity();
+    I_KH.block<NX, 4>(0, 2) -= K; 
+
+    P = I_KH * P * I_KH.transpose() + K * R * K.transpose();
+
+    // Enforce symmetry to prevent floating-point asymmetry
+    P = P.selfadjointView<Eigen::Lower>(); 
 
     // state update
     x_est = x_est + K * res;
 
     // wrap rpy
     x_est.template segment<3>(PHI) = wrapAngles(x_est.template segment<3>(PHI));
+
 }
 
 // ------------------- dynamics f(x) -------------------
@@ -200,7 +209,7 @@ Vec<EKF::NX> EKF::f_nonlin(const Vec<NX>& x,
     return f;
 }
 
-// ------------------- F numeric -------------------
+// ------------------- F  -------------------
 Mat<EKF::NX, EKF::NX> EKF::computeF(const Vec<NX>& x,
     const ImuMeas& imu,
     const Vec<3>& omega_dot,
@@ -397,27 +406,4 @@ Vec<3> EKF::h_pos(const Vec<NX>& x) const {
 
 double EKF::h_psi(const Vec<NX>& x) const {
     return x(PSI);
-}
-
-// ------------------- Hpos numeric (not using anymore) -------------------
-Mat<3, EKF::NX> EKF::computeHpos(const Vec<NX>& x) const {
-    Mat<3, NX> H = Mat<3, NX>::Zero();
-
-    /*
-    for (int j = 0; j < 9; j++) {
-        Vec<NX> dx = Vec<NX>::Zero();
-        dx(j) = eps_H;
-
-        const Vec<3> h1 = h_pos(x + dx);
-        const Vec<3> h0 = h_pos(x - dx);
-
-        H.col(j) = (h1 - h0) / (2.0 * eps_H);
-    }
-    */
-
-    H(0, 3) = 1;
-    H(1, 4) = 1;
-    H(2, 5) = 1;
-
-    return H;
 }

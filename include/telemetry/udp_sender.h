@@ -52,7 +52,13 @@ public:
         const Vec<3>& attCmd,
         const bool& armed,
         const double NIS,
-        const Vec<4>& PWMcmd);
+        const Vec<4>& res,
+        const Vec<4>& PWMcmd,
+        double battery_voltage_mv,
+        double battery_current_ma);
+
+        
+    bool sendVisionData(std::vector<int> hot_cells, std::vector<int> blob_cells);
 
 private:
     bool sendJson_(const nlohmann::json& j);

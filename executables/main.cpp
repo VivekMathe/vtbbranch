@@ -1,5 +1,7 @@
 #include <iostream>
 #include <iomanip>
+#include <unistd.h>
+
 #include "common/TimeKeeper.h"
 #include "common/MathUtils.h"
 #include "common/LowPass.h"
@@ -15,7 +17,6 @@
 #include "drivers/MotorTask.h"
 #include "drivers/RCIn.h"
 #include "sensors/IMUHandler.h"
-#include <unistd.h>
 #include "mocap/mocapHandler.h"
 
 
@@ -24,11 +25,11 @@ int main() {
     std::cout << std::fixed << std::setprecision(4);
     //init objects
     TimeKeeper clock;
-    ModeManager MM;
+    ModeManager MM(false);
     OuterLoop outer;
     InnerLoop inner;
     QuadMixer mixer;
-    UdpSender udp("127.0.0.1", 8080); //KINETIC 192.168.1.2
+    UdpSender udp("192.168.1.2", 8080); //KINETIC 192.168.1.2
     TelemetryState ts;
 
     TelemetryTask telemetry_task(udp);
@@ -38,21 +39,24 @@ int main() {
     rcin.initialize();
 
     MotorDriver motdrv;
-    motdrv.initialize();
-
-    MotorTask<MotorDriver> motor_task(motdrv);
-    std::thread motor_thread(&MotorTask<MotorDriver>::loop, &motor_task);
 
     IMUHandler imuReal;
     Vec<12> imuStats = imuReal.initialize(); //(mgx,mgy,mgz,max,may,maz,siggx,siggy,siggz,sigax,sigay,sigaz)
     imuStats(5) = imuStats(5) + g;
+    std::cout << "IMU values initialized successfully." << std::endl;
     AHRS ahrs(imuStats.segment<6>(0));
     EKF ekf(imuStats.segment<6>(0)); // add bias constructor
+
+    MotorTask<MotorDriver> motor_task(motdrv);
+    std::thread motor_thread(&MotorTask<MotorDriver>::loop, &motor_task);
+    std::cout << "Motor thread started. Waiting for motor initialization..." << std::endl;
     MocapHandler mocap;
     bool mocapInit = mocap.init();
 
-    ImuLpf ekf_filter(952.0f, 80.0f);
-    ImuLpf ctrl_filter(952.0f, 160.0f);
+    ImuLpf ekf_filter(500.0f, 160.0f);
+    ImuLpf ctrl_filter(500.0f, 160.0f);
+    ekf_filter.on = true;
+    ctrl_filter.on = true;
 
     //init vars
     double lastPrint = 0.0;
@@ -63,6 +67,8 @@ int main() {
     Vec<4> wrenchCmd = Vec<4>::Zero();
     Vec<4> pwmCmd = Vec<4>::Zero();
     Vec<6> rcPWM = Vec<6> ::Zero();
+    Vec<4> throttleTest = Vec<4>::Zero();
+    Vec<6> raw;
 
     Vec<3> manVel = Vec<3>::Zero();
     double manPsi = 0.0;
@@ -90,7 +96,7 @@ int main() {
         HzTimer += dt;
         HzCounter++;
 
-        if (HzTimer >= 0.1) {
+        if (HzTimer >= 0.001) {
             Hz = HzCounter / HzTimer;
             HzTimer = 0.0;
             HzCounter = 0;
@@ -99,7 +105,6 @@ int main() {
         if (clock.taskClock.imu >= clock.rates.imu) {
             imuReal.update();
             clock.taskClock.imu = 0.0;
-            Vec<6> raw;
             raw.segment<3>(0) = imuReal.imu.accel;
             raw.segment<3>(3) = imuReal.imu.gyro;
             ekf_filter.update(raw);
@@ -138,6 +143,7 @@ int main() {
 
             if (ekfbadTimer > 5.0) {
                 ekfHealthy = false;
+                std::cout << "UNHEALTHY" << "\n";
             }
             else if (ekfgoodTimer > 1.0) {
                 ekfHealthy = true;
@@ -148,7 +154,7 @@ int main() {
         Vec<15> navState = ekf.getx();
 
         // ---------------- Mode Manager ----------------
-        if (clock.taskClock.MM >= clock.rates.MM) {
+        if ((clock.taskClock.MM >= clock.rates.MM) && ekfHealthy && motor_task.isArmed()) {
             MM.in.state = navState;
             MM.in.dt = dt;
             MM.in.detected = false;
@@ -196,6 +202,8 @@ int main() {
                     outer.in.posCmd = MM.out.posCmd;
                     outer.in.psi = navState(2);
                     outer.in.mode = MM.out.mode;
+                    outer.in.dt = clock.taskClock.conOuter;
+                    outer.in.arm = motor_task.isArmed();
                     outer.update();
                 }
                 else {
@@ -203,6 +211,8 @@ int main() {
                     outer.in.posCmd = navState.segment<3>(3);
                     outer.in.psi = navState(2);
                     outer.in.mode = ModeManager::NavMode::Manual;
+                    outer.in.dt = clock.taskClock.conOuter;
+                    outer.in.arm = motor_task.isArmed();
                     outer.in.velCmd = manVel;
                     outer.update();
                     outer.out.attCmd(2) = navState(2);
@@ -212,11 +222,11 @@ int main() {
 
             // ---------------- AHRS ------------------------
             if (!ahrs.init) {
-                ahrs.initializeFromAccel(ctrl_filter.output().segment<3>(0));
+                ahrs.initialize(0.0, 0.0, 0.0);
                 ahrs.init = true;
             }
             if (clock.taskClock.AHRS >= clock.rates.AHRS) {
-                ahrs.update(ctrl_filter.output().segment<3>(0), ctrl_filter.output().segment<3>(3), clock.taskClock.AHRS);
+                ahrs.update(ctrl_filter.output().segment<3>(0) - imuStats.segment<3>(3), ctrl_filter.output().segment<3>(3) - imuStats.segment<3>(0), clock.taskClock.AHRS);
                 clock.taskClock.AHRS = 0.0;
             }
 
@@ -226,10 +236,7 @@ int main() {
 
             if (clock.taskClock.conInner >= clock.rates.conInner) {
                 attManual << 10 * PI / 180 * manVel(1), -10 * PI / 180 * manVel(0), navState(2);
-                manPsi = manPsi * 10 * PI / 180;
-
-                autopilot = false;
-                ekfHealthy = false;
+                manPsi = manPsi * 20 * PI / 180;
 
                 if (autopilot && ekfHealthy) {
                     momentsCmd =
@@ -237,7 +244,7 @@ int main() {
                             outer.out.attCmd,
                             0.0,
                             navState.segment<3>(0),
-                            ctrl_filter.output().segment<3>(3),
+                            ctrl_filter.output().segment<3>(3) - imuStats.segment<3>(0),
                             clock.taskClock.conInner);
                 }
                 else if (!autopilot && ekfHealthy) {
@@ -246,7 +253,7 @@ int main() {
                             outer.out.attCmd,
                             manPsi,
                             navState.segment<3>(0),
-                            ctrl_filter.output().segment<3>(3),
+                            ctrl_filter.output().segment<3>(3) - imuStats.segment<3>(0),
                             clock.taskClock.conInner);
                 }
                 else if (!autopilot && !ekfHealthy) {
@@ -256,25 +263,31 @@ int main() {
                             attManual,
                             manPsi,
                             AHRSAtt,
-                            ctrl_filter.output().segment<3>(3), clock.taskClock.conInner);
+                            ctrl_filter.output().segment<3>(3) - imuStats.segment<3>(0), clock.taskClock.conInner);
 
-                    double den = cos(AHRSAtt(0)) * cos(AHRSAtt(1));
+                    double den = cos(attManual(0)) * cos(attManual(1));
                     den = clamp(den, 0.2, 1.0);
 
                     double Fz_base = mass * g * (1 - manVel(2));
                     outer.out.Fz = clamp(Fz_base / den, 0, 2 * mass * g);
                 }
-                else {
+                else { // Autopilot is ON, but EKF is UNHEALTHY
                     momentsCmd =
                         inner.computeWrench(
-                            Vec<3>::Zero(),
+                            Vec<3>::Zero(), // Command flat level flight
                             0.0,
                             AHRSAtt,
-                            ctrl_filter.output().segment<3>(3),
+                            ctrl_filter.output().segment<3>(3) - imuStats.segment<3>(0),
                             clock.taskClock.conInner);
-                    outer.out.Fz = mass * g;
+                    
+                    double den = cos(AHRSAtt(0)) * cos(AHRSAtt(1));
+                    den = clamp(den, 0.2, 1.0);
+                    
+                    // Command a slow descent (e.g., 0.5 m/s) to land safely
+                    double Fz_base = mass * g * (1.0 - 0.5); 
+                    outer.out.Fz = clamp(Fz_base / den, 0.0, 2.0 * mass * g);
                 }
-
+                
                 wrenchCmd << outer.out.Fz,
                     momentsCmd(0),
                     momentsCmd(1),
@@ -283,17 +296,16 @@ int main() {
                 thrustCmd = mixer.mix2Thrust(wrenchCmd);
 
                 pwmCmd = mixer.thr2PWM(thrustCmd); //this will go directly to the four motors
-
+		        throttleTest << rcPWM(2),rcPWM(2),rcPWM(2),rcPWM(2);
                 clock.taskClock.conInner = 0.0;
 
                 // ----------------Real Commands -------------
-
                 motor_task.updateState(pwmCmd, rcPWM(4));
-
             }
 
             // ---------------- Telemetry -----------------
             if (clock.taskClock.tele >= clock.rates.tele) {
+		//navState.segment<3>(0) = AHRSAtt;
                 ts.t = t;
                 ts.dt = dt;
                 ts.Hz = Hz;
@@ -304,6 +316,7 @@ int main() {
                 ts.attCmd = outer.out.attCmd;
                 ts.armed = motor_task.isArmed();
                 ts.NIS = NIS;
+                ts.res = ekf.getRes();
                 ts.PWMcmd = pwmCmd;
                 telemetry_task.updateState(ts);
                 clock.taskClock.tele = 0.0;
@@ -322,8 +335,8 @@ int main() {
 
                 const Vec<3> attCmd = attManual;
 
-                const Vec<3> gyro = imuReal.imu.gyro;
-                const Vec<3> accel = imuReal.imu.accel;
+                const Vec<3> gyro = raw.segment<3>(3);
+                const Vec<3> accel = raw.segment<3>(0);
 
                 const Vec<3> optPos = mocap.opti.pos;
                 const double optPsi = mocap.opti.psi;

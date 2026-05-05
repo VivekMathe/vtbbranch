@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <array>
+#include <string>
 #include <Eigen/Dense>
 #include <optional>
 
@@ -24,19 +25,26 @@ public:
 
     // Scans the map for fully bounded fires. Returns true if a valid target is stored.
     bool blob_finder();
-
+ 
     std::optional<Eigen::Vector2d> getCenter() const;
 
+    // Telemetry accessors
+    const std::vector<int>& getHotCells() const { return hot_cells; }
+    const std::vector<int>& getBlobCells() const { return target_blob; }
+
+    // Exports the current thermal map to a CSV file
+    void exportToCSV(std::string filename) const;
+
+    void printVisitedCells() const;
+
 private:
-    // Map Configuration
+    // Map Configuration (5m East x 10m North to fully enclose the flight area)
     const double GRID_RES = 0.1;
-    const int GRID_COLS = 50;              // X: -2.5 to 2.5
-    const int GRID_ROWS = 100;             // Y: -5.0 to 5.0
-    const double OFFSET_X = 2.5;
-    const double OFFSET_Y = 5.0;
+    const int GRID_COLS = 50;              // East: 0.0 to 5.0
+    const int GRID_ROWS = 100;             // North: 0.0 to 10.0
 
     // Detection Configuration
-    const double TEMP_THRESHOLD = 35.0;
+    const double TEMP_THRESHOLD = 27.5;
 
     // The actual memory buffer for the map
     std::vector<GridCell> thermal_map;
@@ -44,15 +52,20 @@ private:
     // Stores the grid indices of the confirmed fire
     std::vector<int> target_blob;
 
-    // Optical constants for the MLX90640
-    const double d_yaw_rad;
-    const double d_pitch_rad;
+    // Stores grid indices of all currently hot cells (avg temp >= TEMP_THRESHOLD)
+    std::vector<int> hot_cells;
+
+    // Per-pixel angular resolution for the MLX90640 (radians per pixel)
+    // d_x_rad: across image columns (horizontal). d_y_rad: across image rows (vertical).
+    const double d_x_rad;
+    const double d_y_rad;
 
     // Math Helpers
     struct Vector3D { double x, y, z; };
     Vector3D rotateBodyToWorld(const Vector3D& v, double roll, double pitch, double yaw) const;
-    bool getGroundIntersection(double yaw_angle, double pitch_angle,
-        double drone_x, double drone_y, double drone_z,
+
+    bool getGroundIntersection(double angle_x, double angle_y,
+        double drone_n, double drone_e, double drone_d,
         double roll, double pitch, double yaw,
-        double& hit_x, double& hit_y) const;
+        double& hit_n, double& hit_e) const;
 };

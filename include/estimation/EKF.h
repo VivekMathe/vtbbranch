@@ -41,6 +41,7 @@ public:
     Vec<NX> getx() const { return x_est; }
     Mat<NX, NX> getP() const { return P; }
     double getHealth() const { return nisAvg; }
+    Vec<4> getRes() const { return res; }
 
 private:
     // internal canonical measurement types for EKF math
@@ -61,18 +62,18 @@ private:
     Vec<4> res = Vec<4>::Zero();
 
     // geometry
-    Vec<3> r_IMU = Vec<3>::Zero(); // (-1.3cm,-0.9cm,-5.8cm)
+    Vec<3> r_IMU{ -0.013,-0.009,-0.058 }; // (-1.3cm,-0.9cm,-5.8cm)
     Vec<3> r_OPTI = Vec<3>::Zero();
 
     // process noise (continuous-time)
-    double sig_g = 0.00017678;
-    double sig_acc = 0.0010607;
-    double sig_ba_walk = 1e-4;
+    double sig_g = 0.001;
+    double sig_acc = 0.01;
+    double sig_ba_walk = 1e-5;
     double sig_bw_walk = 1e-6;
 
     // measurement noise
-    double sig_pos = 0.0001;
-    double sig_psi = 0.0001;
+    double sig_pos = 0.001;
+    double sig_psi = 0.0025;
 
     // numerics
     double eps_F = 1e-6;
@@ -102,7 +103,6 @@ private:
     // measurement model + Jacobian
     Vec<3> h_pos(const Vec<NX>& x) const;
     double h_psi(const Vec<NX>& x) const;
-    Mat<3, NX> computeHpos(const Vec<NX>& x) const;
 
     // health monitoring
     double nisAvg = 0.0;

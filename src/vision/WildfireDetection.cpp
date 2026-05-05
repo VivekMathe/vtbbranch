@@ -4,8 +4,14 @@
 #include <chrono>
 #include <thread>
 #include <Eigen/Dense>
+#include <unistd.h>
+#include <iostream>
+#include <csignal>
 
-void wildfireDetectionTask(StateBuffer& shared_state, HotspotBuffer& shared_targets) {
+
+extern volatile std::sig_atomic_t keep_running;
+
+void wildfireDetectionTask(StateBuffer& shared_state, HotspotBuffer& shared_targets, VisionGridBuffer& vision_telemetry) {
     
     // Initialize I2C Thermal Camera
     ThermalCamera camera;
@@ -17,24 +23,33 @@ void wildfireDetectionTask(StateBuffer& shared_state, HotspotBuffer& shared_targ
     SearchGrid local_grid;
     std::array<double, 768> thermal_frame;
 
+    double target_dt = 1.0 / 32.0;
+
     // Main 32Hz Processing Loop
-    while (true) {
+    while (keep_running) {
         auto start_time = std::chrono::steady_clock::now();
 
         // Pull the latest 32x24 grid of temperatures from the hardware
         if (camera.getFrame(thermal_frame)) {
 
-            // Pull drone state as 6x1 Eigen Matrix (x, y, z, roll, pitch, yaw)
+            // Pull drone state as 6x1 Eigen Matrix (roll, pitch, yaw, north, east, down)
             Eigen::Matrix<double, 6, 1> current_state = shared_state.getLatest();
 
             // Process the frame. Returns true if a fully bounded fire is found.
             if (local_grid.processFrame(thermal_frame, current_state)) {
 
+                std::vector<int> hot_cells = local_grid.getHotCells();
+                std::vector<int> blob_cells = local_grid.getBlobCells();
+
+                vision_telemetry.update(hot_cells, blob_cells);
+                
                 // If a target was found, get center location
                 if (auto fire_location_opt = local_grid.getCenter()) {
 
                     // Unwrap the std::optional into a Eigen 2x1 matrix
                     Eigen::Vector2d fire_coords = *fire_location_opt;
+
+		    std::cout << "Fire Found " << fire_coords << std::endl;
 
                     // Pass the 2x1 matrix to the main control loop via the shared buffer
                     shared_targets.update(fire_coords);
@@ -42,13 +57,31 @@ void wildfireDetectionTask(StateBuffer& shared_state, HotspotBuffer& shared_targ
             }
         }
 
-        // Yield CPU for the remainder of the 31.25ms (32Hz) time budget
+        // --------- Loop timing: compute sleep at fixed target rate ---------
         auto end_time = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        std::chrono::duration<double> compute_dur = end_time - start_time;
+        double compute_s = compute_dur.count();
 
-        // Sleep until 28ms passed from start of execution
-        if (elapsed < std::chrono::milliseconds(28)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(28) - elapsed);
+        double sleep_s = target_dt - compute_s;
+        
+        if (sleep_s > 0.0) {
+            // usleep for the bulk of the time, stopping 100 microseconds early
+            double early_wake_s = sleep_s - 0.000100; 
+            if (early_wake_s > 0.0) {
+                usleep((int)(early_wake_s * 1e6));
+            }
+
+            // Spin-lock (busy wait) for the final fractions of a millisecond
+            while (true) {
+                auto current_time = std::chrono::steady_clock::now();
+                std::chrono::duration<double> elapsed = current_time - start_time;
+                if (elapsed.count() >= target_dt) {
+                    break; 
+                }
+            }
         }
     }
+
+    std::cout << "\nExiting... Exporting thermal map to ground_state.csv" << std::endl;
+    local_grid.exportToCSV("ground_state.csv");
 }

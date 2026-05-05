@@ -1,8 +1,10 @@
 // udp_sender.cpp
 #include "telemetry/udp_sender.h"
+#include <iostream>
 #include <stdexcept>
 #include <utility>
-#include <mutex> // Needed for std::call_once
+#include <mutex>
+#include <iostream>
 
 using json = nlohmann::json;
 
@@ -91,7 +93,11 @@ void UdpSender::resetSeq(uint32_t seq) {
 
 bool UdpSender::sendJson_(const json& j) {
     const std::string payload = j.dump();
-    if (payload.size() > 1200) return false;
+
+    if (payload.size() > 1472) {
+        std::cout << "UDP Payload too large, dropping packet." << std::endl;
+        return false;
+    }
 
     const int sent = ::sendto(
         sock_, payload.data(), static_cast<int>(payload.size()), 0,
@@ -111,12 +117,16 @@ bool UdpSender::sendFromSim(
     const Vec<3>& attCmd,
     const bool& armed,
     const double NIS,
-    const Vec<4>& PWMcmd)
+    const Vec<4>& res,
+    const Vec<4>& PWMcmd,
+    double battery_voltage_mv,
+    double battery_current_ma)
 {
     // ---- Extract what MATLAB expects ----
     const Vecf<3> euler_est = navState.segment<3>(0).cast<float>();
     const Vecf<3> pos_est = navState.segment<3>(3).cast<float>();
     const Vecf<3> vel_est = navState.segment<3>(6).cast<float>();
+    const Vecf<4> resf = res.cast<float>();
 
     // ModeManager outputs
     const Vecf<3> pos_cmd = posCmd.cast<float>();
@@ -134,6 +144,9 @@ bool UdpSender::sendFromSim(
 
     json j;
 
+    // Add the packet type identifier
+    j["type"] = "state";
+
     // seq_++ is now a thread-safe atomic post-increment
     j["seq"] = seq_++;
 
@@ -147,6 +160,7 @@ bool UdpSender::sendFromSim(
     j["mode"] = mode;
     j["armed"] = armed;
     j["EKF_Health"] = NISf;
+    j["Residuals"] = resf;
 
     j["pos_cmd"] = vec3ToJson(pos_cmd);
     j["pos_est"] = vec3ToJson(pos_est);
@@ -156,6 +170,24 @@ bool UdpSender::sendFromSim(
 
     // MATLAB prefers euler_cmd if present
     j["euler_cmd"] = vec3ToJson(euler_cmd);
+    j["battery_voltage_mv"] = battery_voltage_mv;
+    j["battery_current_ma"] = battery_current_ma;
+
+    return sendJson_(j);
+}
+
+bool UdpSender::sendVisionData(std::vector<int> hot_cells, std::vector<int> blob_cells) {
+    json j;
+    
+    // Add the packet type identifier for MATLAB routing
+    j["type"] = "vision";
+
+    // Thread-safe atomic post-increment
+    j["seq"] = seq_++; 
+
+    // nlohmann::json automatically serializes vectors into JSON arrays
+    j["fire_cells"] = hot_cells; 
+    j["blob_cells"] = blob_cells;
 
     return sendJson_(j);
 }

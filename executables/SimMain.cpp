@@ -92,6 +92,8 @@ int main() {
         clock.stepClocks(dt);
         step++;
 
+        motor_task.updateState(Vec<4>::Zero(), 1750.0);
+
         HzTimer += dt;
         HzCounter++;
 
@@ -275,7 +277,7 @@ int main() {
         }
 
         if (!ahrs.init) {
-            ahrs.initializeFromAccel(imu.imu.accel);
+            ahrs.initialize(0.0,0.0,0.0);
             ahrs.init = true;
         }
         if (clock.taskClock.AHRS >= clock.rates.AHRS) {
@@ -377,7 +379,10 @@ int main() {
                 outer.out.attCmd,
                 motor_task.isArmed(),
                 NIS,
-                pwmCmd
+                Vec<4>::Zero(),
+                pwmCmd,
+                0.0,
+                0.0
             );
             clock.taskClock.tele = 0.0;
         }
